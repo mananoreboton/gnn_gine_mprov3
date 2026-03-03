@@ -58,7 +58,12 @@ First run builds the PyG dataset from SDFs (with edge attributes for GINE) and s
 
 ## Layout
 
-- `dataset.py`: Load SDF → PyG `Data` (x, edge_index, pIC50, category); `MProV3Dataset`; split helpers.
-- `model.py`: **GINE** (Graph Isomorphism Network with Edge features) with bond-type edge attributes, global mean pool, and two heads (regression + classification).
-- `train.py`: Training loop, MSE for pIC50 and optional CE for Category; reports RMSE and accuracy.
-- `config.py`: Default paths and hyperparameters.
+- `config.py`: Default paths and typed config dataclasses (`SplitConfig`, `TrainingConfig`).
+- `gine_config.py`: GINE model configuration (`GineConfig` dataclass) and `build()` to construct the model; separates config from model logic.
+- `model.py`: **GINE** (Graph Isomorphism Network with Edge features)—model logic only (`MProGNN`).
+- `dataset.py`: Load SDF → PyG `Data`; `MProV3Dataset`; split/fold loading helpers.
+- `loaders.py`: Collate function and `create_data_loaders()` for train/val/test DataLoaders.
+- `training.py`: Training logic (one-epoch step, loss computation).
+- `validation.py`: Validation evaluation (`evaluate_validation()`, `ValidationMetrics`).
+- `testing.py`: Test evaluation and reporting (`evaluate_test()`, `TestMetrics`, `print_test_report()`).
+- `train.py`: Entry point; parses args, builds configs and loaders, runs train/val loop and test.

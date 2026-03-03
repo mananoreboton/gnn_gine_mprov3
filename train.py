@@ -9,76 +9,16 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Subset
-from torch_geometric.loader import DataLoader
 
-from dataset import MProV3Dataset, get_train_val_test_indices
-from model import get_model
-
-
-def collate_batch(batch):
-    """Collate so that pIC50 and category are stacked and batch vector is set."""
-    from torch_geometric.data import Batch
-    data_batch = Batch.from_data_list([b for b in batch])
-    pIC50 = torch.cat([b.pIC50 for b in batch], dim=0)
-    category = torch.cat([b.category for b in batch], dim=0)
-    return data_batch, pIC50, category
+from config import DEFAULT_DATA_ROOT, SplitConfig, TrainingConfig
+from gine_config import GineConfig
+from loaders import create_data_loaders
+from training import train_one_epoch
+from validation import evaluate_validation
+from testing import evaluate_test, print_test_report
 
 
-def train_one_epoch(model, loader, optimizer, device, criterion_mse, criterion_ce, use_cls):
-    model.train()
-    total_loss = 0.0
-    for data_batch, pIC50, category in loader:
-        data_batch = data_batch.to(device)
-        pIC50 = pIC50.to(device)
-        category = category.to(device).squeeze(-1)
-        optimizer.zero_grad()
-        edge_attr = getattr(data_batch, "edge_attr", None)
-        pred_pIC50, logits = model(
-            data_batch.x,
-            data_batch.edge_index,
-            data_batch.batch,
-            edge_attr,
-        )
-        loss = criterion_mse(pred_pIC50.squeeze(-1), pIC50.squeeze(-1))
-        if use_cls and logits is not None:
-            loss = loss + 0.5 * criterion_ce(logits, category)
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
-    return total_loss / len(loader)
-
-
-@torch.no_grad()
-def evaluate(model, loader, device, use_cls=False):
-    model.eval()
-    mse_sum = 0.0
-    n = 0
-    correct_cls = 0
-    total_cls = 0
-    for data_batch, pIC50, category in loader:
-        data_batch = data_batch.to(device)
-        pIC50 = pIC50.to(device)
-        category = category.to(device).squeeze(-1)
-        edge_attr = getattr(data_batch, "edge_attr", None)
-        pred_pIC50, logits = model(
-            data_batch.x,
-            data_batch.edge_index,
-            data_batch.batch,
-            edge_attr,
-        )
-        mse_sum += ((pred_pIC50.squeeze(-1) - pIC50.squeeze(-1)) ** 2).sum().item()
-        n += pred_pIC50.size(0)
-        if use_cls and logits is not None:
-            pred_cls = logits.argmax(dim=1)
-            correct_cls += (pred_cls == category).sum().item()
-            total_cls += category.size(0)
-    rmse = (mse_sum / n) ** 0.5 if n else 0.0
-    acc = correct_cls / total_cls if total_cls else 0.0
-    return rmse, acc
-
-
-def main():
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train GNN on MPro Version 3")
     parser.add_argument(
         "--data_root",
@@ -87,11 +27,11 @@ def main():
         help="Path to MPro-URV_Version3_snapshot (default: ../MPro-URV_Version3_snapshot)",
     )
     parser.add_argument("--use_splits", action="store_true", help="Use train/val/test from Splits folder")
-    parser.add_argument("--split_file", type=str, default="train_index_folder.txt", help="Train split file (or single file with 3*num_folds lists)")
-    parser.add_argument("--val_split_file", type=str, default=None, help="Val split file (optional; for 3-file format)")
-    parser.add_argument("--test_split_file", type=str, default=None, help="Test split file (optional; for 3-file format)")
-    parser.add_argument("--num_folds", type=int, default=5, help="Number of folds (e.g. 5); used with --use_splits")
-    parser.add_argument("--fold_index", type=int, default=0, help="Which fold to use (0 .. num_folds-1)")
+    parser.add_argument("--split_file", type=str, default="train_index_folder.txt")
+    parser.add_argument("--val_split_file", type=str, default=None)
+    parser.add_argument("--test_split_file", type=str, default=None)
+    parser.add_argument("--num_folds", type=int, default=5)
+    parser.add_argument("--fold_index", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -102,95 +42,85 @@ def main():
     parser.add_argument("--classification", action="store_true", help="Add classification loss (Category)")
     parser.add_argument("--no_classification", action="store_false", dest="classification")
     parser.set_defaults(classification=True)
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    if args.data_root is None:
-        args.data_root = str(Path(__file__).resolve().parent.parent / "MPro-URV_Version3_snapshot")
-    data_root = Path(args.data_root)
+
+def main() -> None:
+    args = _parse_args()
+    data_root = Path(args.data_root or DEFAULT_DATA_ROOT)
     if not data_root.exists():
         raise FileNotFoundError(f"Data root not found: {data_root}")
 
     torch.manual_seed(args.seed)
 
-    # Dataset (processes SDFs and saves to processed_pyg if needed)
-    dataset = MProV3Dataset(
-        root=str(data_root),
-        use_splits=False,
-    )
-    n = len(dataset)
-    print(f"Dataset size: {n}")
-
-    # Splits
-    train_idx, val_idx, test_idx = get_train_val_test_indices(
-        n,
-        data_root,
-        val_ratio=0.1,
-        test_ratio=0.1,
-        seed=args.seed,
+    split_config = SplitConfig(
         use_splits=args.use_splits,
         split_file=args.split_file,
         val_split_file=args.val_split_file,
         test_split_file=args.test_split_file,
         num_folds=args.num_folds,
         fold_index=args.fold_index,
+        val_ratio=0.1,
+        test_ratio=0.1,
+        seed=args.seed,
     )
-    train_dataset = Subset(dataset, train_idx.tolist())
-    val_dataset = Subset(dataset, val_idx.tolist())
-    test_dataset = Subset(dataset, test_idx.tolist())
-
-    train_loader = DataLoader(
-        train_dataset,
+    training_config = TrainingConfig(
+        epochs=args.epochs,
         batch_size=args.batch_size,
-        shuffle=True,
-        collate_fn=collate_batch,
+        lr=args.lr,
+        seed=args.seed,
+        use_classification=args.classification,
+        classification_loss_weight=0.5,
     )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_batch,
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_batch,
-    )
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    in_channels = 4
-    model = get_model(
-        in_channels=in_channels,
+    gine_config = GineConfig(
+        in_channels=4,
         hidden_channels=args.hidden,
         num_layers=args.num_layers,
         dropout=args.dropout,
+        out_regression=1,
         out_classes=3 if args.classification else None,
-    ).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    )
+
+    train_loader, val_loader, test_loader = create_data_loaders(
+        data_root, split_config, batch_size=training_config.batch_size
+    )
+    print(f"Dataset size (train/val/test loaders): {len(train_loader.dataset) + len(val_loader.dataset) + len(test_loader.dataset)}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = gine_config.build().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=training_config.lr)
     criterion_mse = nn.MSELoss()
     criterion_ce = nn.CrossEntropyLoss()
 
     best_val_rmse = float("inf")
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, training_config.epochs + 1):
         train_loss = train_one_epoch(
-            model, train_loader, optimizer, device,
-            criterion_mse, criterion_ce, args.classification,
+            model,
+            train_loader,
+            optimizer,
+            device,
+            criterion_mse,
+            criterion_ce,
+            training_config.use_classification,
+            training_config.classification_loss_weight,
         )
-        val_rmse, val_acc = evaluate(model, val_loader, device, args.classification)
-        if val_rmse < best_val_rmse:
-            best_val_rmse = val_rmse
+        val_metrics = evaluate_validation(
+            model, val_loader, device, training_config.use_classification
+        )
+        if val_metrics.rmse < best_val_rmse:
+            best_val_rmse = val_metrics.rmse
             torch.save(model.state_dict(), data_root / "best_gnn.pt")
         if epoch % 10 == 0 or epoch == 1:
+            acc_str = f"  val_acc={val_metrics.accuracy:.4f}" if val_metrics.accuracy is not None else ""
             print(
-                f"Epoch {epoch:3d}  train_loss={train_loss:.4f}  val_rmse={val_rmse:.4f}"
-                + (f"  val_acc={val_acc:.4f}" if args.classification else "")
+                f"Epoch {epoch:3d}  train_loss={train_loss:.4f}  val_rmse={val_metrics.rmse:.4f}{acc_str}"
             )
 
     model.load_state_dict(torch.load(data_root / "best_gnn.pt"))
-    test_rmse, test_acc = evaluate(model, test_loader, device, args.classification)
-    print(f"Test RMSE (pIC50): {test_rmse:.4f}")
-    if args.classification:
-        print(f"Test accuracy (Category): {test_acc:.4f}")
+    test_metrics = evaluate_test(
+        model, test_loader, device, training_config.use_classification
+    )
+    print_test_report(test_metrics, training_config.use_classification)
 
 
 if __name__ == "__main__":
