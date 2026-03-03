@@ -90,18 +90,59 @@ def load_activity_and_category(
     return pIC50, category
 
 
-def load_splits(data_root: Path, split_file: str) -> List[List[str]]:
-    """Parse Splits file (Python list of lists of PDB IDs). Returns list of folds."""
-    path = data_root / "Splits" / split_file
-    text = path.read_text()
-    # Parse as Python literal: list of lists
+def _parse_split_file(path: Path) -> List[List[str]]:
+    """Parse a single Splits file (Python list of lists of PDB IDs)."""
     import ast
+    text = path.read_text()
     folds = ast.literal_eval(text)
     if isinstance(folds, list) and len(folds) > 0:
         if isinstance(folds[0], list):
             return folds
         return [folds]
     return []
+
+
+def load_splits(
+    data_root: Path,
+    split_file: str,
+    val_split_file: Optional[str] = None,
+    test_split_file: Optional[str] = None,
+) -> List[Tuple[List[str], List[str], List[str]]]:
+    """
+    Load train/val/test splits from the Splits folder.
+    Returns a list of (train_ids, val_ids, test_ids) per fold.
+
+    - If val_split_file and test_split_file are None: single file format.
+      split_file must contain 3*num_folds lists: [train0, val0, test0, train1, val1, test1, ...].
+    - If val_split_file and test_split_file are given: three-file format.
+      Each file contains num_folds lists; fold k uses the k-th list from each file.
+    """
+    if val_split_file is not None and test_split_file is not None:
+        # Three files: train, val, test — each with num_folds lists
+        train_path = data_root / "Splits" / split_file
+        val_path = data_root / "Splits" / val_split_file
+        test_path = data_root / "Splits" / test_split_file
+        train_folds = _parse_split_file(train_path)
+        val_folds = _parse_split_file(val_path)
+        test_folds = _parse_split_file(test_path)
+        num_folds = min(len(train_folds), len(val_folds), len(test_folds))
+        if num_folds == 0:
+            return []
+        return [
+            (train_folds[k], val_folds[k], test_folds[k])
+            for k in range(num_folds)
+        ]
+
+    # Single file: 3*num_folds lists
+    path = data_root / "Splits" / split_file
+    folds = _parse_split_file(path)
+    if len(folds) < 3:
+        return []
+    num_folds = len(folds) // 3
+    return [
+        (folds[3 * k], folds[3 * k + 1], folds[3 * k + 2])
+        for k in range(num_folds)
+    ]
 
 
 class MProV3Dataset(InMemoryDataset):
@@ -118,11 +159,15 @@ class MProV3Dataset(InMemoryDataset):
         pre_filter=None,
         use_splits: bool = False,
         split_file: str = "train_index_folder.txt",
+        val_split_file: Optional[str] = None,
+        test_split_file: Optional[str] = None,
         fold_index: int = 0,
     ):
         self._data_root = Path(root)
         self.use_splits = use_splits
         self.split_file = split_file
+        self._val_split_file = val_split_file
+        self._test_split_file = test_split_file
         self.fold_index = fold_index
         super().__init__(root, transform, pre_transform, pre_filter)
         self.load(self.processed_paths[0])
@@ -148,9 +193,15 @@ class MProV3Dataset(InMemoryDataset):
         pIC50_dict, category_dict = load_activity_and_category(self._data_root)
 
         if self.use_splits:
-            folds = load_splits(self._data_root, self.split_file)
-            if folds and self.fold_index < len(folds):
-                pdb_ids = folds[self.fold_index]
+            folds_tuples = load_splits(
+                self._data_root,
+                self.split_file,
+                val_split_file=getattr(self, "_val_split_file", None),
+                test_split_file=getattr(self, "_test_split_file", None),
+            )
+            if folds_tuples and self.fold_index < len(folds_tuples):
+                train_ids, val_ids, test_ids = folds_tuples[self.fold_index]
+                pdb_ids = sorted(set(train_ids) | set(val_ids) | set(test_ids))
             else:
                 pdb_ids = list(pIC50_dict.keys())
         else:
@@ -188,17 +239,33 @@ def get_train_val_test_indices(
     seed: int = 42,
     use_splits: bool = False,
     split_file: str = "train_index_folder.txt",
+    val_split_file: Optional[str] = None,
+    test_split_file: Optional[str] = None,
+    num_folds: Optional[int] = None,
+    fold_index: int = 0,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Return train, val, test indices. If use_splits, parse Splits and map PDB order to indices.
+    Return train, val, test indices. If use_splits, load from Splits folder and map PDB order to indices.
+    num_folds: number of folds (e.g. 5). Inferred from file(s) if None.
+    fold_index: which fold to use (0 .. num_folds-1). Ignored if num_folds is 1.
     Otherwise random split.
     """
     if use_splits:
-        folds = load_splits(data_root, split_file)
-        if len(folds) >= 3:
-            train_ids = set(folds[0])
-            val_ids = set(folds[1])
-            test_ids = set(folds[2])
+        folds_tuples = load_splits(
+            data_root,
+            split_file,
+            val_split_file=val_split_file,
+            test_split_file=test_split_file,
+        )
+        if folds_tuples:
+            # If num_folds given, ensure fold_index is in range
+            k = fold_index
+            if num_folds is not None:
+                k = min(fold_index, num_folds - 1) if num_folds > 0 else 0
+            k = min(k, len(folds_tuples) - 1)
+            train_ids = set(folds_tuples[k][0])
+            val_ids = set(folds_tuples[k][1])
+            test_ids = set(folds_tuples[k][2])
         else:
             use_splits = False
     if not use_splits:

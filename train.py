@@ -87,7 +87,11 @@ def main():
         help="Path to MPro-URV_Version3_snapshot (default: ../MPro-URV_Version3_snapshot)",
     )
     parser.add_argument("--use_splits", action="store_true", help="Use train/val/test from Splits folder")
-    parser.add_argument("--split_file", type=str, default="train_index_folder.txt")
+    parser.add_argument("--split_file", type=str, default="train_index_folder.txt", help="Train split file (or single file with 3*num_folds lists)")
+    parser.add_argument("--val_split_file", type=str, default=None, help="Val split file (optional; for 3-file format)")
+    parser.add_argument("--test_split_file", type=str, default=None, help="Test split file (optional; for 3-file format)")
+    parser.add_argument("--num_folds", type=int, default=5, help="Number of folds (e.g. 5); used with --use_splits")
+    parser.add_argument("--fold_index", type=int, default=0, help="Which fold to use (0 .. num_folds-1)")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -125,6 +129,10 @@ def main():
         seed=args.seed,
         use_splits=args.use_splits,
         split_file=args.split_file,
+        val_split_file=args.val_split_file,
+        test_split_file=args.test_split_file,
+        num_folds=args.num_folds,
+        fold_index=args.fold_index,
     )
     train_dataset = Subset(dataset, train_idx.tolist())
     val_dataset = Subset(dataset, val_idx.tolist())

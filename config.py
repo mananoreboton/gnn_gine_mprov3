@@ -18,3 +18,5 @@ LR = 1e-3
 SEED = 42
 USE_CLASSIFICATION = True  # Category 3-class loss
 USE_SPLITS = False  # Use predefined train/val/test from Splits folder
+NUM_FOLDS = 5  # Number of folds when using predefined train/val/test split
+FOLD_INDEX = 0  # Which fold to use (0 .. NUM_FOLDS-1)
