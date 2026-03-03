@@ -7,7 +7,6 @@ Labels: pIC50 (regression) and Category (classification: -1, 0, 1 -> 0, 1, 2).
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 
-import numpy as np
 import pandas as pd
 import torch
 from torch_geometric.data import Data, InMemoryDataset
@@ -104,71 +103,63 @@ def _parse_split_file(path: Path) -> List[List[str]]:
 
 def load_splits(
     data_root: Path,
-    split_file: str,
-    val_split_file: Optional[str] = None,
-    test_split_file: Optional[str] = None,
+    train_file: str,
+    val_file: str,
+    test_file: str,
+    num_folds: int,
 ) -> List[Tuple[List[str], List[str], List[str]]]:
     """
-    Load train/val/test splits from the Splits folder.
-    Returns a list of (train_ids, val_ids, test_ids) per fold.
-
-    - If val_split_file and test_split_file are None: single file format.
-      split_file must contain 3*num_folds lists: [train0, val0, test0, train1, val1, test1, ...].
-    - If val_split_file and test_split_file are given: three-file format.
-      Each file contains num_folds lists; fold k uses the k-th list from each file.
+    Load train/val/test splits from three files in the Splits folder.
+    Each file must contain num_folds lists of PDB IDs. Returns one (train_ids, val_ids, test_ids) per fold.
     """
-    if val_split_file is not None and test_split_file is not None:
-        # Three files: train, val, test — each with num_folds lists
-        train_path = data_root / "Splits" / split_file
-        val_path = data_root / "Splits" / val_split_file
-        test_path = data_root / "Splits" / test_split_file
-        train_folds = _parse_split_file(train_path)
-        val_folds = _parse_split_file(val_path)
-        test_folds = _parse_split_file(test_path)
-        num_folds = min(len(train_folds), len(val_folds), len(test_folds))
-        if num_folds == 0:
-            return []
-        return [
-            (train_folds[k], val_folds[k], test_folds[k])
-            for k in range(num_folds)
-        ]
-
-    # Single file: 3*num_folds lists
-    path = data_root / "Splits" / split_file
-    folds = _parse_split_file(path)
-    if len(folds) < 3:
-        return []
-    num_folds = len(folds) // 3
+    splits_dir = data_root / "Splits"
+    train_path = splits_dir / train_file
+    val_path = splits_dir / val_file
+    test_path = splits_dir / test_file
+    for p, name in [(train_path, "train"), (val_path, "val"), (test_path, "test")]:
+        if not p.exists():
+            raise FileNotFoundError(f"Split file not found: {p}")
+    train_folds = _parse_split_file(train_path)
+    val_folds = _parse_split_file(val_path)
+    test_folds = _parse_split_file(test_path)
+    n = min(len(train_folds), len(val_folds), len(test_folds))
+    if n < num_folds:
+        raise ValueError(
+            f"Split files have {n} folds but num_folds={num_folds}. "
+            f"Each file must contain at least {num_folds} lists."
+        )
     return [
-        (folds[3 * k], folds[3 * k + 1], folds[3 * k + 2])
+        (train_folds[k], val_folds[k], test_folds[k])
         for k in range(num_folds)
     ]
 
 
+def _pyg_dataset_not_found_message(data_root: Path, dataset_name: str) -> str:
+    return (
+        f"PyG dataset not found at {data_root / dataset_name / 'data.pt'}. "
+        f"Create it first with: uv run python build_dataset.py --data_root {data_root} [--dataset_name {dataset_name}]"
+    )
+
+
 class MProV3Dataset(InMemoryDataset):
     """
-    In-memory PyG dataset from MPro-URV Version 3 snapshot.
-    Root should point to MPro-URV_Version3_snapshot (parent of Ligand/, Info.csv, etc.).
+    Load a pre-built PyG dataset from data_root/dataset_name/data.pt.
+    Does not build from SDFs; if the file is missing, raises an error. Use build_dataset.py to create it.
     """
 
     def __init__(
         self,
         root: str,
+        dataset_name: str,
         transform=None,
         pre_transform=None,
         pre_filter=None,
-        use_splits: bool = False,
-        split_file: str = "train_index_folder.txt",
-        val_split_file: Optional[str] = None,
-        test_split_file: Optional[str] = None,
-        fold_index: int = 0,
     ):
         self._data_root = Path(root)
-        self.use_splits = use_splits
-        self.split_file = split_file
-        self._val_split_file = val_split_file
-        self._test_split_file = test_split_file
-        self.fold_index = fold_index
+        self._dataset_name = dataset_name
+        dataset_path = self._data_root / dataset_name / "data.pt"
+        if not dataset_path.exists():
+            raise FileNotFoundError(_pyg_dataset_not_found_message(self._data_root, dataset_name))
         super().__init__(root, transform, pre_transform, pre_filter)
         self.load(self.processed_paths[0])
 
@@ -178,7 +169,7 @@ class MProV3Dataset(InMemoryDataset):
 
     @property
     def processed_dir(self) -> str:
-        return str(self._data_root / "processed_pyg")
+        return str(self._data_root / self._dataset_name)
 
     @property
     def raw_file_names(self) -> List[str]:
@@ -189,102 +180,31 @@ class MProV3Dataset(InMemoryDataset):
         return ["data.pt"]
 
     def process(self):
-        sdf_dir = self._data_root / "Ligand" / "Ligand_SDF"
-        pIC50_dict, category_dict = load_activity_and_category(self._data_root)
-
-        if self.use_splits:
-            folds_tuples = load_splits(
-                self._data_root,
-                self.split_file,
-                val_split_file=getattr(self, "_val_split_file", None),
-                test_split_file=getattr(self, "_test_split_file", None),
-            )
-            if folds_tuples and self.fold_index < len(folds_tuples):
-                train_ids, val_ids, test_ids = folds_tuples[self.fold_index]
-                pdb_ids = sorted(set(train_ids) | set(val_ids) | set(test_ids))
-            else:
-                pdb_ids = list(pIC50_dict.keys())
-        else:
-            pdb_ids = sorted(pIC50_dict.keys())
-
-        data_list = []
-        for pdb_id in tqdm(pdb_ids, desc="Loading graphs"):
-            sdf_path = sdf_dir / f"{pdb_id}_ligand.sdf"
-            if not sdf_path.exists():
-                continue
-            g = sdf_to_graph(sdf_path)
-            if g is None:
-                continue
-            if pdb_id not in pIC50_dict:
-                continue
-            g.pIC50 = torch.tensor([pIC50_dict[pdb_id]], dtype=torch.float32)
-            g.category = torch.tensor([category_dict.get(pdb_id, 0)], dtype=torch.long)
-            g.pdb_id = pdb_id
-            data_list.append(g)
-
-        if self.pre_filter is not None:
-            data_list = [d for d in data_list if self.pre_filter(d)]
-        if self.pre_transform is not None:
-            data_list = [self.pre_transform(d) for d in data_list]
-
-        Path(self.processed_dir).mkdir(parents=True, exist_ok=True)
-        self.save(data_list, self.processed_paths[0])
+        raise FileNotFoundError(
+            _pyg_dataset_not_found_message(self._data_root, self._dataset_name)
+        )
 
 
 def get_train_val_test_indices(
-    n: int,
     data_root: Path,
-    val_ratio: float = 0.1,
-    test_ratio: float = 0.1,
-    seed: int = 42,
-    use_splits: bool = False,
-    split_file: str = "train_index_folder.txt",
-    val_split_file: Optional[str] = None,
-    test_split_file: Optional[str] = None,
-    num_folds: Optional[int] = None,
-    fold_index: int = 0,
+    train_file: str,
+    val_file: str,
+    test_file: str,
+    num_folds: int,
+    fold_index: int,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Return train, val, test indices. If use_splits, load from Splits folder and map PDB order to indices.
-    num_folds: number of folds (e.g. 5). Inferred from file(s) if None.
-    fold_index: which fold to use (0 .. num_folds-1). Ignored if num_folds is 1.
-    Otherwise random split.
+    Load train/val/test split from three files and map PDB IDs to dataset indices.
+    Returns indices for the given fold_index (0 .. num_folds-1). Dataset order is sorted(Info.csv PDB_IDs).
     """
-    if use_splits:
-        folds_tuples = load_splits(
-            data_root,
-            split_file,
-            val_split_file=val_split_file,
-            test_split_file=test_split_file,
-        )
-        if folds_tuples:
-            # If num_folds given, ensure fold_index is in range
-            k = fold_index
-            if num_folds is not None:
-                k = min(fold_index, num_folds - 1) if num_folds > 0 else 0
-            k = min(k, len(folds_tuples) - 1)
-            train_ids = set(folds_tuples[k][0])
-            val_ids = set(folds_tuples[k][1])
-            test_ids = set(folds_tuples[k][2])
-        else:
-            use_splits = False
-    if not use_splits:
-        rng = np.random.default_rng(seed)
-        perm = rng.permutation(n)
-        n_val = int(n * val_ratio)
-        n_test = int(n * test_ratio)
-        n_train = n - n_val - n_test
-        return (
-            torch.tensor(perm[:n_train]),
-            torch.tensor(perm[n_train : n_train + n_val]),
-            torch.tensor(perm[n_train + n_val :]),
-        )
-
-    # Build PDB -> index from dataset order (same as in MProV3Dataset process: sorted pdb_ids)
+    folds_tuples = load_splits(data_root, train_file, val_file, test_file, num_folds)
+    k = min(fold_index, num_folds - 1) if num_folds > 0 else 0
+    train_ids = set(folds_tuples[k][0])
+    val_ids = set(folds_tuples[k][1])
+    test_ids = set(folds_tuples[k][2])
     pIC50_dict, _ = load_activity_and_category(data_root)
     pdb_order = sorted(pIC50_dict.keys())
     pdb_to_idx = {p: i for i, p in enumerate(pdb_order)}
-
     train_idx = [pdb_to_idx[p] for p in train_ids if p in pdb_to_idx]
     val_idx = [pdb_to_idx[p] for p in val_ids if p in pdb_to_idx]
     test_idx = [pdb_to_idx[p] for p in test_ids if p in pdb_to_idx]

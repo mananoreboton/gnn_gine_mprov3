@@ -28,38 +28,46 @@ Requires: PyTorch, PyTorch Geometric, RDKit, pandas, numpy, scikit-learn.
 
 ## Usage
 
-### Command-line (train.py)
+### 1. Build the PyG dataset (required once)
 
-From the project root, run (with uv use `uv run` so the virtualenv is used automatically):
+Train/val/test loaders use a **pre-built** PyG dataset. Create it from SDFs and `Info.csv` before training:
 
 ```bash
-# Default: data root = ../MPro-URV_Version3_snapshot, random train/val/test split
+# Default: data_root = ../MPro-URV_Version3_snapshot, dataset saved as processed_pyg/
+uv run python build_dataset.py
+
+# Custom data root and dataset name
+uv run python build_dataset.py --data_root /path/to/MPro-URV_Version3_snapshot --dataset_name processed_pyg
+```
+
+The dataset is written to `data_root/<dataset_name>/data.pt`. If you skip this step, training will exit with an error telling you to run `build_dataset.py` first.
+
+### 2. Train (train.py)
+
+Train/val/test splits are **always** read from **three files** in `data_root/Splits/`:
+
+- **Default file names**: `train_index_folder.txt`, `val_index_folder.txt`, `test_index_folder.txt`
+- Each file must contain **num_folds** lists of PDB IDs (one list per fold). Default **num_folds** is **5**.
+
+```bash
+# Default: data root, default split files, 5 folds, fold 0
 uv run python train.py
 
 # Custom data root
 uv run python train.py --data_root /path/to/MPro-URV_Version3_snapshot
 ```
 
-#### Data and split (folds)
-
-- **Random split** (default): train/val/test are chosen randomly with 80/10/10; use `--seed` for reproducibility.
-- **Predefined splits from Splits folder**: use `--use_splits`. You can use either:
-  - **Single file**: one file (e.g. `train_index_folder.txt`) containing `3 * num_folds` lists: `[train0, val0, test0, train1, val1, test1, ...]`.
-  - **Three files**: one file per role, each with `num_folds` lists; specify all three with `--split_file`, `--val_split_file`, `--test_split_file`.
+#### PyG dataset and split files
 
 ```bash
-# Use predefined splits (5 folds by default), fold 0
-uv run python train.py --use_splits
+# Name of the PyG dataset folder to load (must exist; created by build_dataset.py)
+uv run python train.py --dataset_name processed_pyg
 
-# Choose a specific fold (0 .. num_folds-1) and number of folds
-uv run python train.py --use_splits --num_folds 5 --fold_index 2
+# Override split file names (defaults: train_index_folder.txt, val_index_folder.txt, test_index_folder.txt)
+uv run python train.py --train_split_file train_index_folder.txt --val_split_file val_index_folder.txt --test_split_file test_index_folder.txt
 
-# Three-file format: train/val/test in separate files
-uv run python train.py --use_splits \
-  --split_file train_index_folder.txt \
-  --val_split_file val_index_folder.txt \
-  --test_split_file test_index_folder.txt \
-  --num_folds 5 --fold_index 0
+# Number of folds (default: 5) and which fold to use (0 .. num_folds-1)
+uv run python train.py --num_folds 5 --fold_index 2
 ```
 
 #### Training options
@@ -82,15 +90,17 @@ uv run python train.py --hidden 128 --num_layers 4 --dropout 0.2
 #### Full example
 
 ```bash
+uv run python build_dataset.py --data_root /path/to/MPro-URV_Version3_snapshot
 uv run python train.py \
   --data_root /path/to/MPro-URV_Version3_snapshot \
-  --use_splits --num_folds 5 --fold_index 0 \
+  --dataset_name processed_pyg \
+  --num_folds 5 --fold_index 0 \
   --epochs 100 --batch_size 32 --lr 1e-3 \
   --hidden 64 --num_layers 3 --dropout 0.2 \
   --classification --seed 42
 ```
 
-First run builds the PyG dataset from SDFs and saves it under `data_root/processed_pyg/`. The best model (by validation RMSE) is saved as `best_gnn.pt` in the data root. If you change preprocessing (e.g. edge features), delete `processed_pyg` to force a rebuild.
+The best model (by validation RMSE) is saved as `best_gnn.pt` in the data root.
 
 ---
 
@@ -100,14 +110,14 @@ You can reuse configs, loaders, and train/val/test logic in your own scripts.
 
 #### Configuration
 
-- **`config.SplitConfig`**: split/fold settings (`use_splits`, split file names, `num_folds`, `fold_index`, `val_ratio`, `test_ratio`, `seed`).
+- **`config.SplitConfig`**: train/val/test file names (`train_file`, `val_file`, `test_file`), `num_folds`, `fold_index`, `dataset_name` (PyG dataset folder).
 - **`config.TrainingConfig`**: training run (`epochs`, `batch_size`, `lr`, `seed`, `use_classification`, `classification_loss_weight`).
-- **`gine_config.GineConfig`**: GINE architecture (`in_channels`, `hidden_channels`, `num_layers`, `dropout`, `out_regression`, `out_classes`, `pool`, `edge_dim`). Call `.build()` to get an `MProGNN` instance.
+- **`gine_config.GineConfig`**: GINE architecture (`in_channels`, `hidden_channels`, `num_layers`, `dropout`, etc.). Call `.build()` to get an `MProGNN` instance.
 
 #### Data loaders
 
 - **`loaders.collate_batch(batch)`**: collate list of PyG graphs into a batch plus pIC50 and category tensors.
-- **`loaders.create_data_loaders(data_root, split_config, batch_size=32)`**: returns `(train_loader, val_loader, test_loader)` using `SplitConfig` for indices (random or from Splits folder).
+- **`loaders.create_data_loaders(data_root, split_config, batch_size=32)`**: loads the PyG dataset from `data_root/split_config.dataset_name` (must exist) and returns `(train_loader, val_loader, test_loader)` using the three split files and `fold_index`.
 
 #### Training
 
@@ -135,7 +145,8 @@ from validation import evaluate_validation
 from testing import evaluate_test, print_test_report
 
 data_root = Path("/path/to/MPro-URV_Version3_snapshot")
-split_config = SplitConfig(use_splits=True, num_folds=5, fold_index=0, seed=42)
+# PyG dataset must exist at data_root/processed_pyg/data.pt (run build_dataset.py first)
+split_config = SplitConfig(num_folds=5, fold_index=0, dataset_name="processed_pyg")
 training_config = TrainingConfig(epochs=50, batch_size=32, lr=1e-3, use_classification=True)
 gine_config = GineConfig(hidden_channels=64, num_layers=3, dropout=0.2, out_classes=3)
 
@@ -164,11 +175,12 @@ print_test_report(test_metrics, training_config.use_classification)
 
 | File | Role |
 |------|------|
-| **config.py** | Default paths and typed configs: `SplitConfig`, `TrainingConfig`. |
-| **gine_config.py** | GINE config: `GineConfig` dataclass and `.build()` → `MProGNN`; separates config from model logic. |
-| **model.py** | GINE model logic only: `MProGNN` (Graph Isomorphism Network with Edge features). |
-| **dataset.py** | SDF → PyG `Data`; `MProV3Dataset`; split/fold loading from Splits folder. |
-| **loaders.py** | `collate_batch`, `create_data_loaders` for train/val/test DataLoaders. |
+| **config.py** | Default paths, default split file names, `DEFAULT_PYG_DATASET_NAME`; `SplitConfig`, `TrainingConfig`. |
+| **gine_config.py** | GINE config: `GineConfig` dataclass and `.build()` → `MProGNN`. |
+| **model.py** | GINE model logic: `MProGNN`. |
+| **dataset.py** | Helpers: `sdf_to_graph`, `load_activity_and_category`; `load_splits` (three files); `get_train_val_test_indices`; `MProV3Dataset` (loads pre-built PyG dataset, errors if missing). |
+| **build_dataset.py** | Builds PyG dataset from SDFs and saves to `data_root/<dataset_name>/data.pt`. Run once before training. |
+| **loaders.py** | `collate_batch`, `create_data_loaders` (require existing PyG dataset). |
 | **training.py** | Training logic: `train_one_epoch`. |
 | **validation.py** | Validation: `evaluate_validation`, `ValidationMetrics`. |
 | **testing.py** | Testing: `evaluate_test`, `TestMetrics`, `print_test_report`. |

@@ -2,25 +2,29 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 # Default data root: MPro-URV_Version3_snapshot (sibling of gnn_version3 folder)
 DEFAULT_DATA_ROOT = str(Path(__file__).resolve().parent.parent / "MPro-URV_Version3_snapshot")
+# Default name of the PyG dataset folder under data_root (contains data.pt)
+DEFAULT_PYG_DATASET_NAME = "processed_pyg"
+
+
+# Default split file names (in data_root/Splits/)
+DEFAULT_TRAIN_SPLIT_FILE = "train_index_folder.txt"
+DEFAULT_VAL_SPLIT_FILE = "val_index_folder.txt"
+DEFAULT_TEST_SPLIT_FILE = "test_index_folder.txt"
 
 
 @dataclass(frozen=True)
 class SplitConfig:
-    """Configuration for train/val/test split (folds and split files)."""
+    """Configuration for train/val/test split: three files and folds."""
 
-    use_splits: bool = False
-    split_file: str = "train_index_folder.txt"
-    val_split_file: Optional[str] = None
-    test_split_file: Optional[str] = None
+    train_file: str = DEFAULT_TRAIN_SPLIT_FILE
+    val_file: str = DEFAULT_VAL_SPLIT_FILE
+    test_file: str = DEFAULT_TEST_SPLIT_FILE
     num_folds: int = 5
     fold_index: int = 0
-    val_ratio: float = 0.1
-    test_ratio: float = 0.1
-    seed: int = 42
+    dataset_name: str = DEFAULT_PYG_DATASET_NAME
 
 
 @dataclass(frozen=True)

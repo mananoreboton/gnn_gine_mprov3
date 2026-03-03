@@ -31,23 +31,20 @@ def create_data_loaders(
     batch_size: int = 32,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
-    Build train, validation, and test DataLoaders from the full dataset.
-    Uses split config for indices; same collate for all.
+    Build train, validation, and test DataLoaders. Loads the PyG dataset from
+    data_root/split_config.dataset_name (must exist; run build_dataset.py first).
     """
-    dataset = MProV3Dataset(root=str(data_root), use_splits=False)
-    n = len(dataset)
+    dataset = MProV3Dataset(
+        root=str(data_root),
+        dataset_name=split_config.dataset_name,
+    )
     train_idx, val_idx, test_idx = get_train_val_test_indices(
-        n,
         data_root,
-        val_ratio=split_config.val_ratio,
-        test_ratio=split_config.test_ratio,
-        seed=split_config.seed,
-        use_splits=split_config.use_splits,
-        split_file=split_config.split_file,
-        val_split_file=split_config.val_split_file,
-        test_split_file=split_config.test_split_file,
-        num_folds=split_config.num_folds,
-        fold_index=split_config.fold_index,
+        split_config.train_file,
+        split_config.val_file,
+        split_config.test_file,
+        split_config.num_folds,
+        split_config.fold_index,
     )
     train_dataset = Subset(dataset, train_idx.tolist())
     val_dataset = Subset(dataset, val_idx.tolist())

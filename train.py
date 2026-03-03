@@ -1,7 +1,9 @@
 """
 Train GNN on MPro Version 3: regression (pIC50) and optional classification (Category).
+Requires a pre-built PyG dataset (run build_dataset.py first). Train/val/test from three split files.
 Usage:
-  python train.py --data_root /path/to/MPro-URV_Version3_snapshot [--use_splits] [--epochs 100]
+  uv run python build_dataset.py --data_root /path/to/snapshot
+  python train.py --data_root /path/to/snapshot [--num_folds 5] [--fold_index 0] [--epochs 100]
 """
 
 import argparse
@@ -10,7 +12,15 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from config import DEFAULT_DATA_ROOT, SplitConfig, TrainingConfig
+from config import (
+    DEFAULT_DATA_ROOT,
+    DEFAULT_PYG_DATASET_NAME,
+    DEFAULT_TRAIN_SPLIT_FILE,
+    DEFAULT_VAL_SPLIT_FILE,
+    DEFAULT_TEST_SPLIT_FILE,
+    SplitConfig,
+    TrainingConfig,
+)
 from gine_config import GineConfig
 from loaders import create_data_loaders
 from training import train_one_epoch
@@ -26,12 +36,32 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Path to MPro-URV_Version3_snapshot (default: ../MPro-URV_Version3_snapshot)",
     )
-    parser.add_argument("--use_splits", action="store_true", help="Use train/val/test from Splits folder")
-    parser.add_argument("--split_file", type=str, default="train_index_folder.txt")
-    parser.add_argument("--val_split_file", type=str, default=None)
-    parser.add_argument("--test_split_file", type=str, default=None)
-    parser.add_argument("--num_folds", type=int, default=5)
-    parser.add_argument("--fold_index", type=int, default=0)
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default=DEFAULT_PYG_DATASET_NAME,
+        help=f"PyG dataset folder name under data_root (default: {DEFAULT_PYG_DATASET_NAME})",
+    )
+    parser.add_argument(
+        "--train_split_file",
+        type=str,
+        default=DEFAULT_TRAIN_SPLIT_FILE,
+        help=f"Train split file in Splits/ (default: {DEFAULT_TRAIN_SPLIT_FILE})",
+    )
+    parser.add_argument(
+        "--val_split_file",
+        type=str,
+        default=DEFAULT_VAL_SPLIT_FILE,
+        help=f"Val split file in Splits/ (default: {DEFAULT_VAL_SPLIT_FILE})",
+    )
+    parser.add_argument(
+        "--test_split_file",
+        type=str,
+        default=DEFAULT_TEST_SPLIT_FILE,
+        help=f"Test split file in Splits/ (default: {DEFAULT_TEST_SPLIT_FILE})",
+    )
+    parser.add_argument("--num_folds", type=int, default=5, help="Number of folds (default: 5)")
+    parser.add_argument("--fold_index", type=int, default=0, help="Which fold to use (0 .. num_folds-1)")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -54,15 +84,12 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     split_config = SplitConfig(
-        use_splits=args.use_splits,
-        split_file=args.split_file,
-        val_split_file=args.val_split_file,
-        test_split_file=args.test_split_file,
+        train_file=args.train_split_file,
+        val_file=args.val_split_file,
+        test_file=args.test_split_file,
         num_folds=args.num_folds,
         fold_index=args.fold_index,
-        val_ratio=0.1,
-        test_ratio=0.1,
-        seed=args.seed,
+        dataset_name=args.dataset_name,
     )
     training_config = TrainingConfig(
         epochs=args.epochs,
