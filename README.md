@@ -100,7 +100,24 @@ uv run python train.py \
   --classification --seed 42
 ```
 
-The best model (by validation RMSE) is saved as `best_gnn.pt` in the data root.
+The best model (by validation RMSE) is saved as `best_gnn.pt` in the data root. Training does not run evaluation; use `evaluate.py` for that.
+
+### 3. Evaluate (evaluate.py) — run independently
+
+Evaluate a saved checkpoint on the test set without running training. Use the same split/fold and model architecture as when the model was trained.
+
+```bash
+# Default: data_root, checkpoint data_root/best_gnn.pt, fold 0
+uv run python evaluate.py
+
+# Custom data root and checkpoint
+uv run python evaluate.py --data_root /path/to/snapshot --checkpoint best_gnn.pt
+
+# Same fold and architecture as training
+uv run python evaluate.py --data_root /path/to/snapshot --fold_index 2 --hidden 64 --num_layers 3 --classification
+```
+
+Options: `--data_root`, `--dataset_name`, `--checkpoint` (path relative to data_root or absolute), `--train_split_file`, `--val_split_file`, `--test_split_file`, `--num_folds`, `--fold_index`, `--batch_size`, `--hidden`, `--num_layers`, `--dropout`, `--classification` / `--no_classification` (must match the trained model).
 
 ---
 
@@ -140,9 +157,9 @@ import torch
 from config import SplitConfig, TrainingConfig
 from gine_config import GineConfig
 from loaders import create_data_loaders
-from training import train_one_epoch
+from train_epoch import train_one_epoch
 from validation import evaluate_validation
-from testing import evaluate_test, print_test_report
+from evaluation import evaluate_test, print_test_report
 
 data_root = Path("/path/to/MPro-URV_Version3_snapshot")
 # PyG dataset must exist at data_root/processed_pyg/data.pt (run build_dataset.py first)
@@ -181,7 +198,8 @@ print_test_report(test_metrics, training_config.use_classification)
 | **dataset.py** | Helpers: `sdf_to_graph`, `load_activity_and_category`; `load_splits` (three files); `get_train_val_test_indices`; `MProV3Dataset` (loads pre-built PyG dataset, errors if missing). |
 | **build_dataset.py** | Builds PyG dataset from SDFs and saves to `data_root/<dataset_name>/data.pt`. Run once before training. |
 | **loaders.py** | `collate_batch`, `create_data_loaders` (require existing PyG dataset). |
-| **training.py** | Training logic: `train_one_epoch`. |
+| **train_epoch.py** | One-epoch training step: `train_one_epoch`. |
 | **validation.py** | Validation: `evaluate_validation`, `ValidationMetrics`. |
-| **testing.py** | Testing: `evaluate_test`, `TestMetrics`, `print_test_report`. |
-| **train.py** | CLI entry point: parses args, builds configs and loaders, runs train/val loop and test. |
+| **evaluation.py** | Evaluation: `evaluate_test`, `TestMetrics`, `print_test_report`. |
+| **train.py** | CLI: train only; saves best checkpoint. |
+| **evaluate.py** | CLI: load a checkpoint and evaluate on the test set (no training). |

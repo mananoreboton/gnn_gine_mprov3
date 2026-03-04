@@ -1,5 +1,6 @@
 """
-Testing logic: run final evaluation on the test set and report metrics.
+Evaluation logic: run model on a dataset (e.g. test set) and compute metrics.
+Provides evaluate_test(), TestMetrics, and print_test_report. Used by evaluate.py (evaluation CLI).
 """
 
 from dataclasses import dataclass

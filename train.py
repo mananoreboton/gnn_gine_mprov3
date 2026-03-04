@@ -1,9 +1,10 @@
 """
 Train GNN on MPro Version 3: regression (pIC50) and optional classification (Category).
-Requires a pre-built PyG dataset (run build_dataset.py first). Train/val/test from three split files.
+Requires a pre-built PyG dataset (run build_dataset.py first). Saves best model to data_root/best_gnn.pt.
+Run evaluation separately: uv run python evaluate.py
 Usage:
   uv run python build_dataset.py --data_root /path/to/snapshot
-  python train.py --data_root /path/to/snapshot [--num_folds 5] [--fold_index 0] [--epochs 100]
+  uv run python train.py --data_root /path/to/snapshot [--num_folds 5] [--fold_index 0] [--epochs 100]
 """
 
 import argparse
@@ -23,9 +24,8 @@ from config import (
 )
 from gine_config import GineConfig
 from loaders import create_data_loaders
-from training import train_one_epoch
+from train_epoch import train_one_epoch
 from validation import evaluate_validation
-from testing import evaluate_test, print_test_report
 
 
 def _parse_args() -> argparse.Namespace:
@@ -108,10 +108,10 @@ def main() -> None:
         out_classes=3 if args.classification else None,
     )
 
-    train_loader, val_loader, test_loader = create_data_loaders(
+    train_loader, val_loader, _ = create_data_loaders(
         data_root, split_config, batch_size=training_config.batch_size
     )
-    print(f"Dataset size (train/val/test loaders): {len(train_loader.dataset) + len(val_loader.dataset) + len(test_loader.dataset)}")
+    print(f"Dataset size (train/val): {len(train_loader.dataset)} train, {len(val_loader.dataset)} val")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = gine_config.build().to(device)
@@ -142,12 +142,6 @@ def main() -> None:
             print(
                 f"Epoch {epoch:3d}  train_loss={train_loss:.4f}  val_rmse={val_metrics.rmse:.4f}{acc_str}"
             )
-
-    model.load_state_dict(torch.load(data_root / "best_gnn.pt"))
-    test_metrics = evaluate_test(
-        model, test_loader, device, training_config.use_classification
-    )
-    print_test_report(test_metrics, training_config.use_classification)
 
 
 if __name__ == "__main__":

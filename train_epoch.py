@@ -1,8 +1,7 @@
 """
-Training logic: one-epoch training step and loss computation for the GNN.
+One-epoch training step: run a single training epoch and return mean loss.
+Used by train.py (training CLI).
 """
-
-from typing import Optional
 
 import torch
 import torch.nn as nn
