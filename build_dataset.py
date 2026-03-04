@@ -26,6 +26,7 @@ def build_and_save_pyg_dataset(
     pIC50_dict, category_dict = load_activity_and_category(data_root)
     pdb_ids = sorted(pIC50_dict.keys())
     data_list = []
+    dataset_pdb_order = []  # PDB IDs actually included, in dataset index order
     for pdb_id in tqdm(pdb_ids, desc="Building PyG dataset"):
         sdf_path = sdf_dir / f"{pdb_id}_ligand.sdf"
         if not sdf_path.exists():
@@ -37,11 +38,16 @@ def build_and_save_pyg_dataset(
         g.category = torch.tensor([category_dict.get(pdb_id, 0)], dtype=torch.long)
         g.pdb_id = pdb_id
         data_list.append(g)
+        dataset_pdb_order.append(pdb_id)
     out_dir = data_root / dataset_name
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "data.pt"
-    # Use same format as PyG InMemoryDataset
-    torch.save(data_list, out_path)
+    # PyG InMemoryDataset.load() expects (data.to_dict(), slices, data.__class__)
+    from torch_geometric.data import InMemoryDataset
+    InMemoryDataset.save(data_list, str(out_path))
+    # Save dataset PDB order so split indices map to dataset indices (not Info.csv order)
+    pdb_order_path = out_dir / "pdb_order.txt"
+    pdb_order_path.write_text("\n".join(dataset_pdb_order))
     return out_path
 
 

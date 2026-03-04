@@ -24,16 +24,17 @@ def train_one_epoch(
     """Run one training epoch; return mean loss."""
     model.train()
     total_loss = 0.0
-    for data_batch, pIC50, category in loader:
-        data_batch = data_batch.to(device)
-        pIC50 = pIC50.to(device)
-        category = category.to(device).squeeze(-1)
+    for batch in loader:
+        batch = batch.to(device)
+        pIC50 = batch.pIC50.to(device).squeeze(-1)
+        category = batch.category.to(device).squeeze(-1)
+        data_batch = batch
         optimizer.zero_grad()
-        edge_attr = getattr(data_batch, "edge_attr", None)
+        edge_attr = getattr(batch, "edge_attr", None)
         pred_pIC50, logits = model(
-            data_batch.x,
-            data_batch.edge_index,
-            data_batch.batch,
+            batch.x,
+            batch.edge_index,
+            batch.batch,
             edge_attr,
         )
         loss = criterion_mse(pred_pIC50.squeeze(-1), pIC50.squeeze(-1))

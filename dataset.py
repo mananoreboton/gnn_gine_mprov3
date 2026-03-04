@@ -185,6 +185,15 @@ class MProV3Dataset(InMemoryDataset):
         )
 
 
+def load_dataset_pdb_order(data_root: Path, dataset_name: str) -> Optional[List[str]]:
+    """Load PDB ID order from dataset folder (written by build_dataset). Returns None if missing."""
+    path = data_root / dataset_name / "pdb_order.txt"
+    if not path.exists():
+        return None
+    text = path.read_text().strip()
+    return text.split("\n") if text else []
+
+
 def get_train_val_test_indices(
     data_root: Path,
     train_file: str,
@@ -192,18 +201,24 @@ def get_train_val_test_indices(
     test_file: str,
     num_folds: int,
     fold_index: int,
+    dataset_pdb_order: Optional[List[str]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Load train/val/test split from three files and map PDB IDs to dataset indices.
-    Returns indices for the given fold_index (0 .. num_folds-1). Dataset order is sorted(Info.csv PDB_IDs).
+    If dataset_pdb_order is provided (PDB IDs in same order as the built dataset), indices
+    are in [0, len(dataset)-1]. Otherwise uses sorted(Info.csv) order (may be out of range
+    if the dataset has fewer samples than Info.csv).
     """
     folds_tuples = load_splits(data_root, train_file, val_file, test_file, num_folds)
     k = min(fold_index, num_folds - 1) if num_folds > 0 else 0
     train_ids = set(folds_tuples[k][0])
     val_ids = set(folds_tuples[k][1])
     test_ids = set(folds_tuples[k][2])
-    pIC50_dict, _ = load_activity_and_category(data_root)
-    pdb_order = sorted(pIC50_dict.keys())
+    if dataset_pdb_order is not None:
+        pdb_order = dataset_pdb_order
+    else:
+        pIC50_dict, _ = load_activity_and_category(data_root)
+        pdb_order = sorted(pIC50_dict.keys())
     pdb_to_idx = {p: i for i, p in enumerate(pdb_order)}
     train_idx = [pdb_to_idx[p] for p in train_ids if p in pdb_to_idx]
     val_idx = [pdb_to_idx[p] for p in val_ids if p in pdb_to_idx]

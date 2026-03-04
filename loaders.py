@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
 
-from dataset import MProV3Dataset, get_train_val_test_indices
+from dataset import MProV3Dataset, get_train_val_test_indices, load_dataset_pdb_order
 from config import SplitConfig
 
 
@@ -38,6 +38,7 @@ def create_data_loaders(
         root=str(data_root),
         dataset_name=split_config.dataset_name,
     )
+    dataset_pdb_order = load_dataset_pdb_order(data_root, split_config.dataset_name)
     train_idx, val_idx, test_idx = get_train_val_test_indices(
         data_root,
         split_config.train_file,
@@ -45,6 +46,7 @@ def create_data_loaders(
         split_config.test_file,
         split_config.num_folds,
         split_config.fold_index,
+        dataset_pdb_order=dataset_pdb_order,
     )
     train_dataset = Subset(dataset, train_idx.tolist())
     val_dataset = Subset(dataset, val_idx.tolist())

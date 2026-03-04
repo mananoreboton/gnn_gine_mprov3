@@ -46,7 +46,7 @@ The dataset is written to `data_root/<dataset_name>/data.pt`. If you skip this s
 
 Train/val/test splits are **always** read from **three files** in `data_root/Splits/`:
 
-- **Default file names**: `train_index_folder.txt`, `val_index_folder.txt`, `test_index_folder.txt`
+- **Default file names**: `train_index_folder.txt`, `valid_index_folder.txt`, `test_index_folder.txt`
 - Each file must contain **num_folds** lists of PDB IDs (one list per fold). Default **num_folds** is **5**.
 
 ```bash
@@ -63,8 +63,8 @@ uv run python train.py --data_root /path/to/MPro-URV_Version3_snapshot
 # Name of the PyG dataset folder to load (must exist; created by build_dataset.py)
 uv run python train.py --dataset_name processed_pyg
 
-# Override split file names (defaults: train_index_folder.txt, val_index_folder.txt, test_index_folder.txt)
-uv run python train.py --train_split_file train_index_folder.txt --val_split_file val_index_folder.txt --test_split_file test_index_folder.txt
+# Override split file names (defaults: train_index_folder.txt, valid_index_folder.txt, test_index_folder.txt)
+uv run python train.py --train_split_file train_index_folder.txt --val_split_file valid_index_folder.txt --test_split_file test_index_folder.txt
 
 # Number of folds (default: 5) and which fold to use (0 .. num_folds-1)
 uv run python train.py --num_folds 5 --fold_index 2

@@ -11,7 +11,7 @@ DEFAULT_PYG_DATASET_NAME = "processed_pyg"
 
 # Default split file names (in data_root/Splits/)
 DEFAULT_TRAIN_SPLIT_FILE = "train_index_folder.txt"
-DEFAULT_VAL_SPLIT_FILE = "val_index_folder.txt"
+DEFAULT_VAL_SPLIT_FILE = "valid_index_folder.txt"
 DEFAULT_TEST_SPLIT_FILE = "test_index_folder.txt"
 
 
