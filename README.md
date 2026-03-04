@@ -1,6 +1,107 @@
 # GNN training for MPro Version 3 data
 
-Python pipeline to train a Graph Neural Network on the MPro-URV Version 3 snapshot for **pIC50 regression** and optional **3-class classification** (Category: low / medium / high potency). The codebase is split into configuration, data loading, GINE model, and separate training, validation, and testing logic.
+Python pipeline to train a Graph Neural Network on the MPro-URV Version 3 snapshot for **pIC50 regression** and optional **3-class classification** (Category: low / medium / high potency). The codebase is split into configuration, data loading, GINE model, and separate training, validation, and evaluation logic.
+
+## Overview
+
+```mermaid
+flowchart LR
+    subgraph sources [Data sources]
+        SDF[SDFs]
+        Info[Info.csv]
+        Splits[Splits folder]
+    end
+
+    subgraph build [1. Build]
+        BuildCLI[build_dataset.py]
+        DataPT[data.pt]
+        PdbOrder[pdb_order.txt]
+    end
+
+    subgraph train_flow [2. Train]
+        TrainCLI[train.py]
+        TrainEpoch[train_epoch.py]
+        ValMod[validation.py]
+        BestCkpt[best_gnn.pt]
+    end
+
+    subgraph eval_flow [3. Evaluate]
+        EvalCLI[evaluate.py]
+        EvalMod[evaluation.py]
+        Metrics[Test RMSE and accuracy]
+    end
+
+    SDF --> BuildCLI
+    Info --> BuildCLI
+    BuildCLI --> DataPT
+    BuildCLI --> PdbOrder
+
+    DataPT --> TrainCLI
+    PdbOrder --> TrainCLI
+    Splits --> TrainCLI
+    TrainCLI --> TrainEpoch
+    TrainCLI --> ValMod
+    TrainCLI --> BestCkpt
+
+    DataPT --> EvalCLI
+    PdbOrder --> EvalCLI
+    Splits --> EvalCLI
+    BestCkpt --> EvalCLI
+    EvalCLI --> EvalMod
+    EvalMod --> Metrics
+```
+
+```mermaid
+flowchart TB
+    subgraph cli [Command-line entry points]
+        BuildScript[build_dataset.py]
+        TrainScript[train.py]
+        EvalScript[evaluate.py]
+    end
+
+    subgraph config [Configuration]
+        Config[config.py]
+        GineConfig[gine_config.py]
+    end
+
+    subgraph data_layer [Data]
+        Dataset[dataset.py]
+        Loaders[loaders.py]
+        BuildScript
+    end
+
+    subgraph model_layer [Model]
+        Model[model.py]
+        GineConfig
+    end
+
+    subgraph train_logic [Training and validation]
+        TrainEpoch[train_epoch.py]
+        Validation[validation.py]
+        TrainScript
+    end
+
+    subgraph eval_logic [Evaluation]
+        Evaluation[evaluation.py]
+        EvalScript
+    end
+
+    Config --> Loaders
+    Config --> TrainScript
+    Config --> EvalScript
+    GineConfig --> Model
+    Dataset --> Loaders
+    Dataset --> BuildScript
+    Loaders --> TrainScript
+    Loaders --> EvalScript
+    Model --> TrainEpoch
+    Model --> Validation
+    Model --> Evaluation
+    TrainEpoch --> TrainScript
+    Validation --> TrainScript
+    Validation --> Evaluation
+    Evaluation --> EvalScript
+```
 
 ## Data
 
