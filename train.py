@@ -1,5 +1,5 @@
 """
-Train GNN on MPro Version 3: regression (pIC50) and optional classification (Category).
+Train GNN on MPro Version 3: classification only (Category: low / medium / high potency).
 Requires a pre-built PyG dataset (run build_dataset.py first). Saves best model to data_root/best_gnn.pt.
 Run evaluation separately: uv run python evaluate.py
 Usage:
@@ -29,7 +29,7 @@ from validation import evaluate_validation
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train GNN on MPro Version 3")
+    parser = argparse.ArgumentParser(description="Train GNN on MPro Version 3 (classification)")
     parser.add_argument(
         "--data_root",
         type=str,
@@ -69,9 +69,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--classification", action="store_true", help="Add classification loss (Category)")
-    parser.add_argument("--no_classification", action="store_false", dest="classification")
-    parser.set_defaults(classification=True)
+    parser.add_argument("--num_classes", type=int, default=3, help="Number of classes (Category, default: 3)")
     return parser.parse_args()
 
 
@@ -96,16 +94,13 @@ def main() -> None:
         batch_size=args.batch_size,
         lr=args.lr,
         seed=args.seed,
-        use_classification=args.classification,
-        classification_loss_weight=0.5,
     )
     gine_config = GineConfig(
         in_channels=4,
         hidden_channels=args.hidden,
         num_layers=args.num_layers,
         dropout=args.dropout,
-        out_regression=1,
-        out_classes=3 if args.classification else None,
+        out_classes=args.num_classes,
     )
 
     train_loader, val_loader, _ = create_data_loaders(
@@ -116,31 +111,24 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = gine_config.build().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=training_config.lr)
-    criterion_mse = nn.MSELoss()
     criterion_ce = nn.CrossEntropyLoss()
 
-    best_val_rmse = float("inf")
+    best_val_acc = 0.0
     for epoch in range(1, training_config.epochs + 1):
         train_loss = train_one_epoch(
             model,
             train_loader,
             optimizer,
             device,
-            criterion_mse,
             criterion_ce,
-            training_config.use_classification,
-            training_config.classification_loss_weight,
         )
-        val_metrics = evaluate_validation(
-            model, val_loader, device, training_config.use_classification
-        )
-        if val_metrics.rmse < best_val_rmse:
-            best_val_rmse = val_metrics.rmse
+        val_metrics = evaluate_validation(model, val_loader, device)
+        if val_metrics.accuracy > best_val_acc:
+            best_val_acc = val_metrics.accuracy
             torch.save(model.state_dict(), data_root / "best_gnn.pt")
         if epoch % 10 == 0 or epoch == 1:
-            acc_str = f"  val_acc={val_metrics.accuracy:.4f}" if val_metrics.accuracy is not None else ""
             print(
-                f"Epoch {epoch:3d}  train_loss={train_loss:.4f}  val_rmse={val_metrics.rmse:.4f}{acc_str}"
+                f"Epoch {epoch:3d}  train_loss={train_loss:.4f}  val_acc={val_metrics.accuracy:.4f}"
             )
 
 

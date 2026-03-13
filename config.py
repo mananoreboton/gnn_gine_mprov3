@@ -29,14 +29,12 @@ class SplitConfig:
 
 @dataclass(frozen=True)
 class TrainingConfig:
-    """Configuration for the training run (optimizer, epochs, loss)."""
+    """Configuration for the training run."""
 
     epochs: int = 100
     batch_size: int = 32
     lr: float = 1e-3
     seed: int = 42
-    use_classification: bool = True
-    classification_loss_weight: float = 0.5
 
 
 # Legacy constants (for backwards compatibility or quick scripts)
@@ -48,7 +46,6 @@ EPOCHS = 100
 BATCH_SIZE = 32
 LR = 1e-3
 SEED = 42
-USE_CLASSIFICATION = True
 USE_SPLITS = False
 NUM_FOLDS = 5
 FOLD_INDEX = 0

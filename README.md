@@ -1,6 +1,6 @@
 # GNN training for MPro Version 3 data
 
-Python pipeline to train a Graph Neural Network on the MPro-URV Version 3 snapshot for **pIC50 regression** and optional **3-class classification** (Category: low / medium / high potency). The codebase is split into configuration, data loading, GINE model, and separate training, validation, and evaluation logic.
+Python pipeline to train a Graph Neural Network on the MPro-URV Version 3 snapshot for **3-class classification** (Category: low / medium / high potency). The codebase is split into configuration, data loading, GINE model, and separate training, validation, and evaluation logic.
 
 ## Overview
 
@@ -28,7 +28,7 @@ flowchart LR
     subgraph eval_flow [3. Evaluate]
         EvalCLI[evaluate.py]
         EvalMod[evaluation.py]
-        Metrics[Test RMSE and accuracy]
+        Metrics[Test accuracy]
     end
 
     SDF --> BuildCLI
@@ -177,8 +177,8 @@ uv run python train.py --num_folds 5 --fold_index 2
 # Epochs, batch size, learning rate, seed
 uv run python train.py --epochs 150 --batch_size 16 --lr 5e-4 --seed 42
 
-# Regression only (no Category classification loss)
-uv run python train.py --no_classification
+# Number of classes (default 3)
+uv run python train.py --num_classes 3
 ```
 
 #### GINE model (architecture)
@@ -198,10 +198,10 @@ uv run python train.py \
   --num_folds 5 --fold_index 0 \
   --epochs 100 --batch_size 32 --lr 1e-3 \
   --hidden 64 --num_layers 3 --dropout 0.2 \
-  --classification --seed 42
+  --num_classes 3 --seed 42
 ```
 
-The best model (by validation RMSE) is saved as `best_gnn.pt` in the data root. Training does not run evaluation; use `evaluate.py` for that.
+The best model (by validation accuracy) is saved as `best_gnn.pt` in the data root. Training does not run evaluation; use `evaluate.py` for that.
 
 ### 3. Evaluate (evaluate.py) — run independently
 
@@ -215,10 +215,10 @@ uv run python evaluate.py
 uv run python evaluate.py --data_root /path/to/snapshot --checkpoint best_gnn.pt
 
 # Same fold and architecture as training
-uv run python evaluate.py --data_root /path/to/snapshot --fold_index 2 --hidden 64 --num_layers 3 --classification
+uv run python evaluate.py --data_root /path/to/snapshot --fold_index 2 --hidden 64 --num_layers 3 --num_classes 3
 ```
 
-Options: `--data_root`, `--dataset_name`, `--checkpoint` (path relative to data_root or absolute), `--train_split_file`, `--val_split_file`, `--test_split_file`, `--num_folds`, `--fold_index`, `--batch_size`, `--hidden`, `--num_layers`, `--dropout`, `--classification` / `--no_classification` (must match the trained model).
+Options: `--data_root`, `--dataset_name`, `--checkpoint` (path relative to data_root or absolute), `--train_split_file`, `--val_split_file`, `--test_split_file`, `--num_folds`, `--fold_index`, `--batch_size`, `--hidden`, `--num_layers`, `--dropout`, `--num_classes` (must match the trained model).
 
 ---
 
@@ -229,26 +229,26 @@ You can reuse configs, loaders, and train/val/test logic in your own scripts.
 #### Configuration
 
 - **`config.SplitConfig`**: train/val/test file names (`train_file`, `val_file`, `test_file`), `num_folds`, `fold_index`, `dataset_name` (PyG dataset folder).
-- **`config.TrainingConfig`**: training run (`epochs`, `batch_size`, `lr`, `seed`, `use_classification`, `classification_loss_weight`).
-- **`gine_config.GineConfig`**: GINE architecture (`in_channels`, `hidden_channels`, `num_layers`, `dropout`, etc.). Call `.build()` to get an `MProGNN` instance.
+- **`config.TrainingConfig`**: training run (`epochs`, `batch_size`, `lr`, `seed`).
+- **`gine_config.GineConfig`**: GINE architecture (`in_channels`, `hidden_channels`, `num_layers`, `dropout`, `out_classes`). Call `.build()` to get an `MProGNN` instance.
 
 #### Data loaders
 
-- **`loaders.collate_batch(batch)`**: collate list of PyG graphs into a batch plus pIC50 and category tensors.
+- **`loaders.collate_batch(batch)`**: collate list of PyG graphs into a batch (includes category labels; pIC50 still in data for reference).
 - **`loaders.create_data_loaders(data_root, split_config, batch_size=32)`**: loads the PyG dataset from `data_root/split_config.dataset_name` (must exist) and returns `(train_loader, val_loader, test_loader)` using the three split files and `fold_index`.
 
 #### Training
 
-- **`training.train_one_epoch(model, loader, optimizer, device, criterion_mse, criterion_ce, use_classification, classification_loss_weight)`**: one training epoch; returns mean loss.
+- **`train_epoch.train_one_epoch(model, loader, optimizer, device, criterion_ce)`**: one training epoch (cross-entropy); returns mean loss.
 
 #### Validation
 
-- **`validation.evaluate_validation(model, loader, device, use_classification=False)`**: returns **`ValidationMetrics`** (`rmse`, optional `accuracy`).
+- **`validation.evaluate_validation(model, loader, device)`**: returns **`ValidationMetrics`** (`accuracy`).
 
-#### Testing
+#### Evaluation
 
-- **`testing.evaluate_test(model, loader, device, use_classification=False)`**: returns **`TestMetrics`** (`rmse`, optional `accuracy`).
-- **`testing.print_test_report(metrics, use_classification=False)`**: prints test RMSE and optional accuracy.
+- **`evaluation.evaluate_test(model, loader, device)`**: returns **`TestMetrics`** (`accuracy`).
+- **`evaluation.print_test_report(metrics)`**: prints test accuracy.
 
 #### Example script
 
@@ -265,26 +265,24 @@ from evaluation import evaluate_test, print_test_report
 data_root = Path("/path/to/MPro-URV_Version3_snapshot")
 # PyG dataset must exist at data_root/processed_pyg/data.pt (run build_dataset.py first)
 split_config = SplitConfig(num_folds=5, fold_index=0, dataset_name="processed_pyg")
-training_config = TrainingConfig(epochs=50, batch_size=32, lr=1e-3, use_classification=True)
+training_config = TrainingConfig(epochs=50, batch_size=32, lr=1e-3)
 gine_config = GineConfig(hidden_channels=64, num_layers=3, dropout=0.2, out_classes=3)
 
 train_loader, val_loader, test_loader = create_data_loaders(data_root, split_config, training_config.batch_size)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = gine_config.build().to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=training_config.lr)
-criterion_mse = torch.nn.MSELoss()
 criterion_ce = torch.nn.CrossEntropyLoss()
 
 # Training loop (simplified)
 for epoch in range(1, training_config.epochs + 1):
-    train_one_epoch(model, train_loader, optimizer, device, criterion_mse, criterion_ce,
-                    training_config.use_classification, training_config.classification_loss_weight)
-    val_metrics = evaluate_validation(model, val_loader, device, training_config.use_classification)
-    # ... save best model, etc.
+    train_one_epoch(model, train_loader, optimizer, device, criterion_ce)
+    val_metrics = evaluate_validation(model, val_loader, device)
+    # ... save best model by val_metrics.accuracy, etc.
 
 model.load_state_dict(torch.load(data_root / "best_gnn.pt"))
-test_metrics = evaluate_test(model, test_loader, device, training_config.use_classification)
-print_test_report(test_metrics, training_config.use_classification)
+test_metrics = evaluate_test(model, test_loader, device)
+print_test_report(test_metrics)
 ```
 
 ---

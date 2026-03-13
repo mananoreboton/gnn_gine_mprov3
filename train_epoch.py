@@ -1,5 +1,5 @@
 """
-One-epoch training step: run a single training epoch and return mean loss.
+One-epoch training step: run a single training epoch (classification only) and return mean loss.
 Used by train.py (training CLI).
 """
 
@@ -15,30 +15,18 @@ def train_one_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    criterion_mse: nn.Module,
     criterion_ce: nn.Module,
-    use_classification: bool,
-    classification_loss_weight: float = 0.5,
 ) -> float:
-    """Run one training epoch; return mean loss."""
+    """Run one training epoch (cross-entropy on category); return mean loss."""
     model.train()
     total_loss = 0.0
     for batch in loader:
         batch = batch.to(device)
-        pIC50 = batch.pIC50.to(device).squeeze(-1)
         category = batch.category.to(device).squeeze(-1)
-        data_batch = batch
         optimizer.zero_grad()
         edge_attr = getattr(batch, "edge_attr", None)
-        pred_pIC50, logits = model(
-            batch.x,
-            batch.edge_index,
-            batch.batch,
-            edge_attr,
-        )
-        loss = criterion_mse(pred_pIC50.squeeze(-1), pIC50.squeeze(-1))
-        if use_classification and logits is not None:
-            loss = loss + classification_loss_weight * criterion_ce(logits, category)
+        logits = model(batch.x, batch.edge_index, batch.batch, edge_attr)
+        loss = criterion_ce(logits, category)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()

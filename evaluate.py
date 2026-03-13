@@ -1,6 +1,6 @@
 """
-Evaluate a trained GNN on the test set from the command line.
-Loads a saved checkpoint and reports test RMSE and optional classification accuracy.
+Classify a trained GNN on the test set from the command line (classification only).
+Loads a saved checkpoint and reports test accuracy.
 Use the same split/fold and model architecture as training.
 Usage:
   uv run python evaluate.py --data_root /path/to/snapshot [--checkpoint best_gnn.pt] [--fold_index 0]
@@ -26,7 +26,7 @@ from evaluation import evaluate_test, print_test_report
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate a trained GNN on the test set (run independently of training)."
+        description="Evaluate a trained GNN on the test set (classification, run independently of training)."
     )
     parser.add_argument(
         "--data_root",
@@ -70,9 +70,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden", type=int, default=64, help="Must match trained model")
     parser.add_argument("--num_layers", type=int, default=3, help="Must match trained model")
     parser.add_argument("--dropout", type=float, default=0.2, help="Must match trained model")
-    parser.add_argument("--classification", action="store_true", help="Model has classification head")
-    parser.add_argument("--no_classification", action="store_false", dest="classification")
-    parser.set_defaults(classification=True)
+    parser.add_argument("--num_classes", type=int, default=3, help="Number of classes (default: 3)")
     return parser.parse_args()
 
 
@@ -101,8 +99,7 @@ def main() -> None:
         hidden_channels=args.hidden,
         num_layers=args.num_layers,
         dropout=args.dropout,
-        out_regression=1,
-        out_classes=3 if args.classification else None,
+        out_classes=args.num_classes,
     )
 
     _, _, test_loader = create_data_loaders(
@@ -114,10 +111,8 @@ def main() -> None:
     model = gine_config.build().to(device)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False))
 
-    test_metrics = evaluate_test(
-        model, test_loader, device, use_classification=args.classification
-    )
-    print_test_report(test_metrics, args.classification)
+    test_metrics = evaluate_test(model, test_loader, device)
+    print_test_report(test_metrics)
 
 
 if __name__ == "__main__":
