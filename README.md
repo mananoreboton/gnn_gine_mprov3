@@ -129,6 +129,23 @@ Requires: PyTorch, PyTorch Geometric, RDKit, pandas, numpy, scikit-learn.
 
 ## Usage
 
+### 0. Validate data formats (optional but recommended)
+
+Before building or training, you can run quick checks to ensure that your raw dataset and the generated PyG dataset are compatible with this project.
+
+```bash
+# Validate raw input data layout (Info.csv, Ligand_SDF, Splits, basic SDF and label sanity)
+uv run python check_input_data_format.py --data_root /path/to/MPro-URV_Version3_snapshot
+
+# Validate a built PyG dataset (data.pt, pdb_order.txt, graph shapes/labels, split indices)
+uv run python check_output_data_format.py \
+  --data_root /path/to/MPro-URV_Version3_snapshot \
+  --dataset_name processed_pyg \
+  --num_folds 5 --fold_index 0
+```
+
+If any check fails, the script exits with code 1 and prints `[ERROR]` lines explaining the problem.
+
 ### 1. Build the PyG dataset (required once)
 
 Train/val/test loaders use a **pre-built** PyG dataset. Create it from SDFs and `Info.csv` before training:
@@ -296,6 +313,8 @@ print_test_report(test_metrics)
 | **model.py** | GINE model logic: `MProGNN`. |
 | **dataset.py** | Helpers: `sdf_to_graph`, `load_activity_and_category`; `load_splits` (three files); `get_train_val_test_indices`; `MProV3Dataset` (loads pre-built PyG dataset, errors if missing). |
 | **build_dataset.py** | Builds PyG dataset from SDFs and saves to `data_root/<dataset_name>/data.pt`. Run once before training. |
+| **check_input_data_format.py** | CLI: validate that a raw dataset at `--data_root` has the expected files (Info.csv, Ligand_SDF, Splits) and that SDFs/labels/splits can be parsed. |
+| **check_output_data_format.py** | CLI: validate that a built PyG dataset (`data.pt`) and `pdb_order.txt` are present and compatible with the training/evaluation code (graph shapes, labels, split indices). |
 | **loaders.py** | `collate_batch`, `create_data_loaders` (require existing PyG dataset). |
 | **train_epoch.py** | One-epoch training step: `train_one_epoch`. |
 | **validation.py** | Validation: `evaluate_validation`, `ValidationMetrics`. |
