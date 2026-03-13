@@ -1,9 +1,9 @@
 """
-Classify a trained GNN on the test set from the command line (classification only).
-Loads a saved checkpoint and reports test accuracy.
-Use the same split/fold and model architecture as training.
+Generic GNN evaluation: load a checkpoint and evaluate on test set using index file.
 Usage:
-  uv run python evaluate.py --data_root /path/to/snapshot [--checkpoint best_gnn.pt] [--fold_index 0]
+  uv run python evaluate.py --data_root /path/to/data --processed_dir my_dataset \\
+    --test_indices_file test.txt --checkpoint best_gnn.pt
+For MPro v3, use: uv run python -m mpro.evaluate
 """
 
 import argparse
@@ -11,74 +11,59 @@ from pathlib import Path
 
 import torch
 
-from config import (
-    DEFAULT_DATA_ROOT,
-    DEFAULT_PYG_DATASET_NAME,
-    DEFAULT_TRAIN_SPLIT_FILE,
-    DEFAULT_VAL_SPLIT_FILE,
-    DEFAULT_TEST_SPLIT_FILE,
-    SplitConfig,
-)
+from dataset_base import GenericPyGDataset, load_indices_from_file
 from gine_config import GineConfig
 from loaders import create_data_loaders
-from evaluation import evaluate_test, print_test_report
+from run_training import run_evaluation
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate a trained GNN on the test set (classification, run independently of training)."
+        description="Evaluate a trained GNN on the test set (generic, uses index file)."
+    )
+    parser.add_argument("--data_root", type=str, required=True, help="Path to data root")
+    parser.add_argument(
+        "--processed_dir",
+        type=str,
+        default="processed_pyg",
+        help="Subfolder under data_root with data.pt (default: processed_pyg)",
     )
     parser.add_argument(
-        "--data_root",
+        "--test_indices_file",
         type=str,
-        default=None,
-        help="Path to MPro-URV_Version3_snapshot (default: ../MPro-URV_Version3_snapshot)",
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default=DEFAULT_PYG_DATASET_NAME,
-        help=f"PyG dataset folder name under data_root (default: {DEFAULT_PYG_DATASET_NAME})",
+        required=True,
+        help="Path to file with test indices (one int per line)",
     )
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="best_gnn.pt",
-        help="Path to model checkpoint relative to data_root, or absolute path (default: best_gnn.pt)",
+        required=True,
+        help="Path to model checkpoint (relative to data_root or absolute)",
     )
     parser.add_argument(
-        "--train_split_file",
+        "--label_attr",
         type=str,
-        default=DEFAULT_TRAIN_SPLIT_FILE,
-        help=f"Train split file in Splits/ (default: {DEFAULT_TRAIN_SPLIT_FILE})",
+        default="y",
+        help="Batch attribute for class labels (default: y)",
     )
-    parser.add_argument(
-        "--val_split_file",
-        type=str,
-        default=DEFAULT_VAL_SPLIT_FILE,
-        help=f"Val split file in Splits/ (default: {DEFAULT_VAL_SPLIT_FILE})",
-    )
-    parser.add_argument(
-        "--test_split_file",
-        type=str,
-        default=DEFAULT_TEST_SPLIT_FILE,
-        help=f"Test split file in Splits/ (default: {DEFAULT_TEST_SPLIT_FILE})",
-    )
-    parser.add_argument("--num_folds", type=int, default=5, help="Number of folds (default: 5)")
-    parser.add_argument("--fold_index", type=int, default=0, help="Which fold to use (0 .. num_folds-1)")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for evaluation")
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--hidden", type=int, default=64, help="Must match trained model")
-    parser.add_argument("--num_layers", type=int, default=3, help="Must match trained model")
-    parser.add_argument("--dropout", type=float, default=0.2, help="Must match trained model")
-    parser.add_argument("--num_classes", type=int, default=3, help="Number of classes (default: 3)")
+    parser.add_argument("--num_layers", type=int, default=3)
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--in_channels", type=int, default=4)
+    parser.add_argument("--num_classes", type=int, default=3)
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    data_root = Path(args.data_root or DEFAULT_DATA_ROOT)
+    data_root = Path(args.data_root)
     if not data_root.exists():
         raise FileNotFoundError(f"Data root not found: {data_root}")
+
+    test_idx_path = Path(args.test_indices_file)
+    if not test_idx_path.exists():
+        raise FileNotFoundError(f"Test indices file not found: {test_idx_path}")
 
     checkpoint_path = Path(args.checkpoint)
     if not checkpoint_path.is_absolute():
@@ -86,33 +71,28 @@ def main() -> None:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    split_config = SplitConfig(
-        train_file=args.train_split_file,
-        val_file=args.val_split_file,
-        test_file=args.test_split_file,
-        num_folds=args.num_folds,
-        fold_index=args.fold_index,
-        dataset_name=args.dataset_name,
+    test_indices = load_indices_from_file(test_idx_path)
+    dataset = GenericPyGDataset(root=str(data_root), processed_dir=args.processed_dir)
+    _, _, test_loader = create_data_loaders(
+        dataset, [], [], test_indices, batch_size=args.batch_size
     )
+    print(f"Test set size: {len(test_indices)}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gine_config = GineConfig(
-        in_channels=4,
+        in_channels=args.in_channels,
         hidden_channels=args.hidden,
         num_layers=args.num_layers,
         dropout=args.dropout,
         out_classes=args.num_classes,
     )
-
-    _, _, test_loader = create_data_loaders(
-        data_root, split_config, batch_size=args.batch_size
+    run_evaluation(
+        test_loader,
+        checkpoint_path,
+        gine_config,
+        device,
+        label_attr=args.label_attr,
     )
-    print(f"Test set size: {len(test_loader.dataset)}")
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = gine_config.build().to(device)
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False))
-
-    test_metrics = evaluate_test(model, test_loader, device)
-    print_test_report(test_metrics)
 
 
 if __name__ == "__main__":

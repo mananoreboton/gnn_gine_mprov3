@@ -16,17 +16,18 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     criterion_ce: nn.Module,
+    label_attr: str = "y",
 ) -> float:
-    """Run one training epoch (cross-entropy on category); return mean loss."""
+    """Run one training epoch (cross-entropy on labels); return mean loss. Labels from batch.<label_attr>."""
     model.train()
     total_loss = 0.0
     for batch in loader:
         batch = batch.to(device)
-        category = batch.category.to(device).squeeze(-1)
+        labels = getattr(batch, label_attr).to(device).squeeze(-1)
         optimizer.zero_grad()
         edge_attr = getattr(batch, "edge_attr", None)
         logits = model(batch.x, batch.edge_index, batch.batch, edge_attr)
-        loss = criterion_ce(logits, category)
+        loss = criterion_ce(logits, labels)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()

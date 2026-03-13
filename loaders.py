@@ -1,56 +1,40 @@
 """
-Data loaders: collate function and factory for train/val/test DataLoaders.
+Generic data loaders: collate and factory for train/val/test DataLoaders.
+Works with any PyG dataset and index lists; no dataset-specific logic.
 """
 
-from pathlib import Path
 from typing import List, Tuple
 
 import torch
-from torch.utils.data import Subset
+from torch.utils.data import Dataset, Subset
+from torch_geometric.data import Batch
 from torch_geometric.loader import DataLoader
 
-from dataset import MProV3Dataset, get_train_val_test_indices, load_dataset_pdb_order
-from config import SplitConfig
 
-
-def collate_batch(
-    batch: List,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Collate so that pIC50 and category are stacked and batch vector is set."""
-    from torch_geometric.data import Batch
-
-    data_batch = Batch.from_data_list([b for b in batch])
-    pIC50 = torch.cat([b.pIC50 for b in batch], dim=0)
-    category = torch.cat([b.category for b in batch], dim=0)
-    return data_batch, pIC50, category
+def collate_batch(batch: List) -> Batch:
+    """Collate a list of PyG Data into a single Batch (attributes are stacked by PyG)."""
+    return Batch.from_data_list([b for b in batch])
 
 
 def create_data_loaders(
-    data_root: Path,
-    split_config: SplitConfig,
+    dataset: Dataset,
+    train_indices: List[int],
+    val_indices: List[int],
+    test_indices: List[int],
     batch_size: int = 32,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
-    Build train, validation, and test DataLoaders. Loads the PyG dataset from
-    data_root/split_config.dataset_name (must exist; run build_dataset.py first).
+    Build train, validation, and test DataLoaders from a dataset and three index lists.
+    Indices can be lists or 1D tensors.
     """
-    dataset = MProV3Dataset(
-        root=str(data_root),
-        dataset_name=split_config.dataset_name,
-    )
-    dataset_pdb_order = load_dataset_pdb_order(data_root, split_config.dataset_name)
-    train_idx, val_idx, test_idx = get_train_val_test_indices(
-        data_root,
-        split_config.train_file,
-        split_config.val_file,
-        split_config.test_file,
-        split_config.num_folds,
-        split_config.fold_index,
-        dataset_pdb_order=dataset_pdb_order,
-    )
-    train_dataset = Subset(dataset, train_idx.tolist())
-    val_dataset = Subset(dataset, val_idx.tolist())
-    test_dataset = Subset(dataset, test_idx.tolist())
+    train_idx = train_indices.tolist() if isinstance(train_indices, torch.Tensor) else train_indices
+    val_idx = val_indices.tolist() if isinstance(val_indices, torch.Tensor) else val_indices
+    test_idx = test_indices.tolist() if isinstance(test_indices, torch.Tensor) else test_indices
+
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    test_dataset = Subset(dataset, test_idx)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,

@@ -1,7 +1,7 @@
 """
 MPro Version 3 dataset: load SDF ligands and build PyTorch Geometric graphs.
 Node features: (x, y, z, atomic_number). Edges from bonds.
-Labels: pIC50 (regression) and Category (classification: -1, 0, 1 -> 0, 1, 2).
+Labels: pIC50 (stored for reference) and Category (classification: -1, 0, 1 -> 0, 1, 2).
 """
 
 from pathlib import Path
@@ -11,7 +11,6 @@ import pandas as pd
 import torch
 from torch_geometric.data import Data, InMemoryDataset
 from rdkit import Chem
-from rdkit.Chem import AllChem
 from tqdm import tqdm
 
 
@@ -137,14 +136,14 @@ def load_splits(
 def _pyg_dataset_not_found_message(data_root: Path, dataset_name: str) -> str:
     return (
         f"PyG dataset not found at {data_root / dataset_name / 'data.pt'}. "
-        f"Create it first with: uv run python build_dataset.py --data_root {data_root} [--dataset_name {dataset_name}]"
+        f"Create it first with: uv run python -m mpro.build_dataset --data_root {data_root} [--dataset_name {dataset_name}]"
     )
 
 
 class MProV3Dataset(InMemoryDataset):
     """
     Load a pre-built PyG dataset from data_root/dataset_name/data.pt.
-    Does not build from SDFs; if the file is missing, raises an error. Use build_dataset.py to create it.
+    Does not build from SDFs; if the file is missing, raises an error. Use mpro.build_dataset to create it.
     """
 
     def __init__(

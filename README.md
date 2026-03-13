@@ -1,112 +1,105 @@
-# GNN training for MPro Version 3 data
+# GNN training for graph classification
 
-Python pipeline to train a Graph Neural Network on the MPro-URV Version 3 snapshot for **3-class classification** (Category: low / medium / high potency). The codebase is split into configuration, data loading, GINE model, and separate training, validation, and evaluation logic.
+Python pipeline to train a GINE (Graph Isomorphism Network with Edge features) for **graph-level classification**. The codebase is split into:
+
+- **Generic scripts** (`train.py`, `evaluate.py`): work with any PyG dataset and train/val/test index files.
+- **MPro v3 scripts** (`mpro` package): build dataset from SDFs + Info.csv, and train/evaluate using MPro split files and folds.
 
 ## Overview
 
 ```mermaid
 flowchart LR
-    subgraph sources [Data sources]
+    subgraph generic [Generic flow]
+        GData[data.pt]
+        GIdx[train/val/test index files]
+        GTrain[train.py]
+        GEval[evaluate.py]
+        GData --> GTrain
+        GIdx --> GTrain
+        GTrain --> BestCkpt[best_gnn.pt]
+        GData --> GEval
+        GIdx --> GEval
+        BestCkpt --> GEval
+    end
+
+    subgraph mpro [MPro v3 flow]
         SDF[SDFs]
         Info[Info.csv]
         Splits[Splits folder]
+        MBuild[mpro.build_dataset]
+        MTrain[mpro.train]
+        MEval[mpro.evaluate]
+        SDF --> MBuild
+        Info --> MBuild
+        MBuild --> GData
+        MBuild --> PdbOrder[pdb_order.txt]
+        GData --> MTrain
+        PdbOrder --> MTrain
+        Splits --> MTrain
+        MTrain --> BestCkpt
+        GData --> MEval
+        Splits --> MEval
+        BestCkpt --> MEval
     end
-
-    subgraph build [1. Build]
-        BuildCLI[build_dataset.py]
-        DataPT[data.pt]
-        PdbOrder[pdb_order.txt]
-    end
-
-    subgraph train_flow [2. Train]
-        TrainCLI[train.py]
-        TrainEpoch[train_epoch.py]
-        ValMod[validation.py]
-        BestCkpt[best_gnn.pt]
-    end
-
-    subgraph eval_flow [3. Evaluate]
-        EvalCLI[evaluate.py]
-        EvalMod[evaluation.py]
-        Metrics[Test accuracy]
-    end
-
-    SDF --> BuildCLI
-    Info --> BuildCLI
-    BuildCLI --> DataPT
-    BuildCLI --> PdbOrder
-
-    DataPT --> TrainCLI
-    PdbOrder --> TrainCLI
-    Splits --> TrainCLI
-    TrainCLI --> TrainEpoch
-    TrainCLI --> ValMod
-    TrainCLI --> BestCkpt
-
-    DataPT --> EvalCLI
-    PdbOrder --> EvalCLI
-    Splits --> EvalCLI
-    BestCkpt --> EvalCLI
-    EvalCLI --> EvalMod
-    EvalMod --> Metrics
 ```
 
 ```mermaid
 flowchart TB
-    subgraph cli [Command-line entry points]
-        BuildScript[build_dataset.py]
-        TrainScript[train.py]
-        EvalScript[evaluate.py]
+    subgraph generic_cli [Generic CLI]
+        TrainGen[train.py]
+        EvalGen[evaluate.py]
     end
 
-    subgraph config [Configuration]
+    subgraph mpro_cli [MPro CLI]
+        BuildMpro[build_dataset.py / mpro.build_dataset]
+        TrainMpro[mpro.train]
+        EvalMpro[mpro.evaluate]
+    end
+
+    subgraph core [Core modules]
+        DatasetBase[dataset_base.py]
+        Loaders[loaders.py]
+        RunTraining[run_training.py]
         Config[config.py]
         GineConfig[gine_config.py]
-    end
-
-    subgraph data_layer [Data]
-        Dataset[dataset.py]
-        Loaders[loaders.py]
-        BuildScript
-    end
-
-    subgraph model_layer [Model]
         Model[model.py]
-        GineConfig
-    end
-
-    subgraph train_logic [Training and validation]
         TrainEpoch[train_epoch.py]
         Validation[validation.py]
-        TrainScript
-    end
-
-    subgraph eval_logic [Evaluation]
         Evaluation[evaluation.py]
-        EvalScript
     end
 
-    Config --> Loaders
-    Config --> TrainScript
-    Config --> EvalScript
+    subgraph mpro_pkg [mpro package]
+        MproConfig[mpro.config]
+        MproDataset[mpro.dataset]
+        MproConfig --> TrainMpro
+        MproConfig --> EvalMpro
+        MproDataset --> BuildMpro
+        MproDataset --> TrainMpro
+        MproDataset --> EvalMpro
+    end
+
+    DatasetBase --> TrainGen
+    DatasetBase --> EvalGen
+    Loaders --> TrainGen
+    Loaders --> TrainMpro
+    Loaders --> EvalGen
+    Loaders --> EvalMpro
+    RunTraining --> TrainGen
+    RunTraining --> TrainMpro
+    RunTraining --> EvalGen
+    RunTraining --> EvalMpro
     GineConfig --> Model
-    Dataset --> Loaders
-    Dataset --> BuildScript
-    Loaders --> TrainScript
-    Loaders --> EvalScript
     Model --> TrainEpoch
     Model --> Validation
     Model --> Evaluation
-    TrainEpoch --> TrainScript
-    Validation --> TrainScript
-    Validation --> Evaluation
-    Evaluation --> EvalScript
 ```
 
-## Data
+## Data (MPro v3)
 
 - **Graphs**: One graph per ligand from `Ligand/Ligand_SDF/*.sdf`. Node features: 3D coordinates (x, y, z) and atomic number. Edges: bonds; edge features: bond type (single=1, double=2, triple=3, aromatic=1.5) for GINE.
 - **Labels**: `Info.csv` provides `pIC50` and `Category` (-1: pIC50&lt;5.5, 0: 5.5≤pIC50&lt;6.5, 1: pIC50≥6.5). Category is mapped to classes 0, 1, 2.
+
+**Generic datasets**: Any PyG dataset saved as `data.pt` (InMemoryDataset format) with a label attribute (e.g. `y` or `category`) and three index files (one int per line) for train/val/test can be used with `train.py` and `evaluate.py`.
 
 ## Setup
 
@@ -129,176 +122,111 @@ Requires: PyTorch, PyTorch Geometric, RDKit, pandas, numpy, scikit-learn.
 
 ## Usage
 
-### 1. Build the PyG dataset (required once)
+### Generic flow (any PyG dataset)
 
-Train/val/test loaders use a **pre-built** PyG dataset. Create it from SDFs and `Info.csv` before training:
+You need a **pre-built** `data.pt` (PyG InMemoryDataset format) and **three text files** with train/val/test indices (one integer per line).
+
+#### 1. Train (generic)
 
 ```bash
-# Default: data_root = ../MPro-URV_Version3_snapshot, dataset saved as processed_pyg/
-uv run python build_dataset.py
+uv run python train.py \
+  --data_root /path/to/data \
+  --processed_dir processed_pyg \
+  --train_indices_file /path/to/train.txt \
+  --val_indices_file /path/to/val.txt \
+  --test_indices_file /path/to/test.txt \
+  --in_channels 4 --num_classes 3 \
+  [--label_attr y] [--epochs 100] [--save_path /path/to/best_gnn.pt]
+```
 
-# Custom data root and dataset name
+- `--label_attr`: batch attribute for labels (default `y`). Your graphs must have this attribute (e.g. `data.y` or `data.category`).
+- `--in_channels`, `--num_classes`: must match your dataset.
+
+#### 2. Evaluate (generic)
+
+```bash
+uv run python evaluate.py \
+  --data_root /path/to/data \
+  --processed_dir processed_pyg \
+  --test_indices_file /path/to/test.txt \
+  --checkpoint /path/to/best_gnn.pt \
+  --in_channels 4 --num_classes 3 [--label_attr y]
+```
+
+---
+
+### MPro v3 flow
+
+#### 1. Build the PyG dataset (required once)
+
+```bash
+# Default data root and dataset name
+uv run python build_dataset.py
+# or: uv run python -m mpro.build_dataset
+
+# Custom paths
 uv run python build_dataset.py --data_root /path/to/MPro-URV_Version3_snapshot --dataset_name processed_pyg
 ```
 
-The dataset is written to `data_root/<dataset_name>/data.pt`. If you skip this step, training will exit with an error telling you to run `build_dataset.py` first.
+Writes `data_root/<dataset_name>/data.pt` and `pdb_order.txt`.
 
-### 2. Train (train.py)
+#### 2. Train (MPro)
 
-Train/val/test splits are **always** read from **three files** in `data_root/Splits/`:
-
-- **Default file names**: `train_index_folder.txt`, `valid_index_folder.txt`, `test_index_folder.txt`
-- Each file must contain **num_folds** lists of PDB IDs (one list per fold). Default **num_folds** is **5**.
+Train/val/test come from **three files** in `data_root/Splits/` (default: `train_index_folder.txt`, `valid_index_folder.txt`, `test_index_folder.txt`), each with **num_folds** lists of PDB IDs.
 
 ```bash
-# Default: data root, default split files, 5 folds, fold 0
-uv run python train.py
-
-# Custom data root
-uv run python train.py --data_root /path/to/MPro-URV_Version3_snapshot
+uv run python -m mpro.train [--data_root /path] [--num_folds 5] [--fold_index 0] [--epochs 100]
 ```
 
-#### PyG dataset and split files
+Options: `--dataset_name`, `--train_split_file`, `--val_split_file`, `--test_split_file`, `--num_folds`, `--fold_index`, `--epochs`, `--batch_size`, `--lr`, `--hidden`, `--num_layers`, `--dropout`, `--num_classes`, `--save_path`.
+
+#### 3. Evaluate (MPro)
 
 ```bash
-# Name of the PyG dataset folder to load (must exist; created by build_dataset.py)
-uv run python train.py --dataset_name processed_pyg
-
-# Override split file names (defaults: train_index_folder.txt, valid_index_folder.txt, test_index_folder.txt)
-uv run python train.py --train_split_file train_index_folder.txt --val_split_file valid_index_folder.txt --test_split_file test_index_folder.txt
-
-# Number of folds (default: 5) and which fold to use (0 .. num_folds-1)
-uv run python train.py --num_folds 5 --fold_index 2
+uv run python -m mpro.evaluate [--data_root /path] [--checkpoint best_gnn.pt] [--fold_index 0]
 ```
 
-#### Training options
+Use the same fold and architecture as training. Best model is saved as `data_root/best_gnn.pt` by default.
 
-```bash
-# Epochs, batch size, learning rate, seed
-uv run python train.py --epochs 150 --batch_size 16 --lr 5e-4 --seed 42
-
-# Number of classes (default 3)
-uv run python train.py --num_classes 3
-```
-
-#### GINE model (architecture)
-
-```bash
-# Hidden size, depth, dropout
-uv run python train.py --hidden 128 --num_layers 4 --dropout 0.2
-```
-
-#### Full example
+#### Full MPro example
 
 ```bash
 uv run python build_dataset.py --data_root /path/to/MPro-URV_Version3_snapshot
-uv run python train.py \
-  --data_root /path/to/MPro-URV_Version3_snapshot \
-  --dataset_name processed_pyg \
-  --num_folds 5 --fold_index 0 \
-  --epochs 100 --batch_size 32 --lr 1e-3 \
-  --hidden 64 --num_layers 3 --dropout 0.2 \
-  --num_classes 3 --seed 42
+uv run python -m mpro.train --data_root /path/to/MPro-URV_Version3_snapshot --num_folds 5 --fold_index 0 --epochs 100
+uv run python -m mpro.evaluate --data_root /path/to/MPro-URV_Version3_snapshot --checkpoint best_gnn.pt --fold_index 0
 ```
-
-The best model (by validation accuracy) is saved as `best_gnn.pt` in the data root. Training does not run evaluation; use `evaluate.py` for that.
-
-### 3. Evaluate (evaluate.py) — run independently
-
-Evaluate a saved checkpoint on the test set without running training. Use the same split/fold and model architecture as when the model was trained.
-
-```bash
-# Default: data_root, checkpoint data_root/best_gnn.pt, fold 0
-uv run python evaluate.py
-
-# Custom data root and checkpoint
-uv run python evaluate.py --data_root /path/to/snapshot --checkpoint best_gnn.pt
-
-# Same fold and architecture as training
-uv run python evaluate.py --data_root /path/to/snapshot --fold_index 2 --hidden 64 --num_layers 3 --num_classes 3
-```
-
-Options: `--data_root`, `--dataset_name`, `--checkpoint` (path relative to data_root or absolute), `--train_split_file`, `--val_split_file`, `--test_split_file`, `--num_folds`, `--fold_index`, `--batch_size`, `--hidden`, `--num_layers`, `--dropout`, `--num_classes` (must match the trained model).
 
 ---
 
 ### Programmatic use
 
-You can reuse configs, loaders, and train/val/test logic in your own scripts.
+**Generic**: use `dataset_base.GenericPyGDataset`, `dataset_base.load_indices_from_file`, `loaders.create_data_loaders(dataset, train_idx, val_idx, test_idx, batch_size)`, and `run_training.run_training` / `run_training.run_evaluation` with `label_attr`.
 
-#### Configuration
+**MPro**: use `mpro.config.SplitConfig`, `mpro.dataset.MProV3Dataset`, `mpro.dataset.get_train_val_test_indices`, then `loaders.create_data_loaders` and `run_training.run_training(..., label_attr="category")`.
 
-- **`config.SplitConfig`**: train/val/test file names (`train_file`, `val_file`, `test_file`), `num_folds`, `fold_index`, `dataset_name` (PyG dataset folder).
-- **`config.TrainingConfig`**: training run (`epochs`, `batch_size`, `lr`, `seed`).
-- **`gine_config.GineConfig`**: GINE architecture (`in_channels`, `hidden_channels`, `num_layers`, `dropout`, `out_classes`). Call `.build()` to get an `MProGNN` instance.
-
-#### Data loaders
-
-- **`loaders.collate_batch(batch)`**: collate list of PyG graphs into a batch (includes category labels; pIC50 still in data for reference).
-- **`loaders.create_data_loaders(data_root, split_config, batch_size=32)`**: loads the PyG dataset from `data_root/split_config.dataset_name` (must exist) and returns `(train_loader, val_loader, test_loader)` using the three split files and `fold_index`.
-
-#### Training
-
-- **`train_epoch.train_one_epoch(model, loader, optimizer, device, criterion_ce)`**: one training epoch (cross-entropy); returns mean loss.
-
-#### Validation
-
-- **`validation.evaluate_validation(model, loader, device)`**: returns **`ValidationMetrics`** (`accuracy`).
-
-#### Evaluation
-
-- **`evaluation.evaluate_test(model, loader, device)`**: returns **`TestMetrics`** (`accuracy`).
-- **`evaluation.print_test_report(metrics)`**: prints test accuracy.
-
-#### Example script
-
-```python
-from pathlib import Path
-import torch
-from config import SplitConfig, TrainingConfig
-from gine_config import GineConfig
-from loaders import create_data_loaders
-from train_epoch import train_one_epoch
-from validation import evaluate_validation
-from evaluation import evaluate_test, print_test_report
-
-data_root = Path("/path/to/MPro-URV_Version3_snapshot")
-# PyG dataset must exist at data_root/processed_pyg/data.pt (run build_dataset.py first)
-split_config = SplitConfig(num_folds=5, fold_index=0, dataset_name="processed_pyg")
-training_config = TrainingConfig(epochs=50, batch_size=32, lr=1e-3)
-gine_config = GineConfig(hidden_channels=64, num_layers=3, dropout=0.2, out_classes=3)
-
-train_loader, val_loader, test_loader = create_data_loaders(data_root, split_config, training_config.batch_size)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = gine_config.build().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=training_config.lr)
-criterion_ce = torch.nn.CrossEntropyLoss()
-
-# Training loop (simplified)
-for epoch in range(1, training_config.epochs + 1):
-    train_one_epoch(model, train_loader, optimizer, device, criterion_ce)
-    val_metrics = evaluate_validation(model, val_loader, device)
-    # ... save best model by val_metrics.accuracy, etc.
-
-model.load_state_dict(torch.load(data_root / "best_gnn.pt"))
-test_metrics = evaluate_test(model, test_loader, device)
-print_test_report(test_metrics)
-```
+- **`config.TrainingConfig`**: generic training (`epochs`, `batch_size`, `lr`, `seed`). MPro split config: `mpro.config.SplitConfig`.
+- **`gine_config.GineConfig`**: GINE architecture; `.build()` → `MProGNN`.
+- **`dataset_base.GenericPyGDataset(root, processed_dir)`**: load any `data.pt` from root/processed_dir. **`dataset_base.load_indices_from_file(path)`**: one int per line.
+- **`loaders.create_data_loaders(dataset, train_indices, val_indices, test_indices, batch_size)`**: returns `(train_loader, val_loader, test_loader)`.
+- **`train_epoch.train_one_epoch(..., label_attr="y")`**, **`validation.evaluate_validation(..., label_attr="y")`**, **`evaluation.evaluate_test(..., label_attr="y")`**: optional label attribute name.
+- **`run_training.run_training(...)`**, **`run_training.run_evaluation(...)`**: full training loop and evaluation runner.
 
 ---
 
 ## Layout
 
-| File | Role |
-|------|------|
-| **config.py** | Default paths, default split file names, `DEFAULT_PYG_DATASET_NAME`; `SplitConfig`, `TrainingConfig`. |
-| **gine_config.py** | GINE config: `GineConfig` dataclass and `.build()` → `MProGNN`. |
-| **model.py** | GINE model logic: `MProGNN`. |
-| **dataset.py** | Helpers: `sdf_to_graph`, `load_activity_and_category`; `load_splits` (three files); `get_train_val_test_indices`; `MProV3Dataset` (loads pre-built PyG dataset, errors if missing). |
-| **build_dataset.py** | Builds PyG dataset from SDFs and saves to `data_root/<dataset_name>/data.pt`. Run once before training. |
-| **loaders.py** | `collate_batch`, `create_data_loaders` (require existing PyG dataset). |
-| **train_epoch.py** | One-epoch training step: `train_one_epoch`. |
-| **validation.py** | Validation: `evaluate_validation`, `ValidationMetrics`. |
-| **evaluation.py** | Evaluation: `evaluate_test`, `TestMetrics`, `print_test_report`. |
-| **train.py** | CLI: train only; saves best checkpoint. |
-| **evaluate.py** | CLI: load a checkpoint and evaluate on the test set (no training). |
+| File / package | Role |
+|----------------|------|
+| **config.py** | Generic `TrainingConfig` and constants. |
+| **dataset_base.py** | `GenericPyGDataset(root, processed_dir)`, `load_indices_from_file(path)`. |
+| **loaders.py** | `collate_batch`, `create_data_loaders(dataset, train_idx, val_idx, test_idx, batch_size)`. |
+| **run_training.py** | `run_training(...)`, `run_evaluation(...)` (shared by generic and MPro CLIs). |
+| **gine_config.py** | `GineConfig`, `.build()` → `MProGNN`. |
+| **model.py** | GINE: `MProGNN`. |
+| **train_epoch.py** | `train_one_epoch(..., label_attr)`. |
+| **validation.py** | `evaluate_validation(..., label_attr)`, `ValidationMetrics`. |
+| **evaluation.py** | `evaluate_test(..., label_attr)`, `TestMetrics`, `print_test_report`. |
+| **train.py** | Generic CLI: dataset path + index files; saves best model. |
+| **evaluate.py** | Generic CLI: dataset path + test index file + checkpoint. |
+| **build_dataset.py** | Convenience: runs `mpro.build_dataset.main()`. |
+| **mpro/** | MPro v3: `config`, `dataset` (SDF→graph, splits, `MProV3Dataset`), `build_dataset`, `train`, `evaluate`. |

@@ -23,12 +23,13 @@ def evaluate_test(
     model: MProGNN,
     loader: DataLoader,
     device: torch.device,
+    label_attr: str = "y",
 ) -> TestMetrics:
-    """Compute test accuracy."""
-    metrics = evaluate_validation(model, loader, device)
+    """Compute test accuracy. Labels from batch.<label_attr>."""
+    metrics = evaluate_validation(model, loader, device, label_attr=label_attr)
     return TestMetrics(accuracy=metrics.accuracy)
 
 
 def print_test_report(metrics: TestMetrics) -> None:
     """Print test accuracy to stdout."""
-    print(f"Test accuracy (Category): {metrics.accuracy:.4f}")
+    print(f"Test accuracy: {metrics.accuracy:.4f}")
