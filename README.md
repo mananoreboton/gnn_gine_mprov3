@@ -123,7 +123,7 @@ Or with pip:
 pip install -r requirements.txt
 ```
 
-Requires: PyTorch, PyTorch Geometric, RDKit, pandas, numpy, scikit-learn.
+Requires: PyTorch, PyTorch Geometric, RDKit, pandas, numpy, scikit-learn, matplotlib.
 
 ---
 
@@ -236,6 +236,35 @@ uv run python evaluate.py --data_root /path/to/snapshot --fold_index 2 --hidden 
 ```
 
 Options: `--data_root`, `--dataset_name`, `--checkpoint` (path relative to data_root or absolute), `--train_split_file`, `--val_split_file`, `--test_split_file`, `--num_folds`, `--fold_index`, `--batch_size`, `--hidden`, `--num_layers`, `--dropout`, `--num_classes` (must match the trained model).
+
+### 4. Visualize ligand graphs (visualize_graphs.py)
+
+You can draw a subset of ligand graphs from the built PyG dataset (`data.pt`) and save one image per PDB ID plus a small HTML report containing node/edge tables.
+
+```bash
+# Default: first 16 graphs from the default dataset
+uv run python visualize_graphs.py
+
+# Specify how many graphs to draw
+uv run python visualize_graphs.py --num_graphs 32
+
+# Select by dataset indices
+uv run python visualize_graphs.py --indices 0 1 2 10 25
+
+# Select by PDB IDs (requires pdb_order.txt written by build_dataset.py)
+uv run python visualize_graphs.py --pdb_ids 5R83 6LU7
+```
+
+Output is written under `report/input/graphs`:
+
+- `PDB_ID.png`: 2D drawing of the molecular graph.
+- `PDB_ID.html`: report with PDB ID, category, pIC50 (if available), and tables for:
+  - nodes (atoms) with atomic number and (x, y, z) coordinates
+  - edges (bonds) with bond scalar and bond type:
+    - 1.0 → single bond (one solid line)
+    - 2.0 → double bond (two solid lines)
+    - 3.0 → triple bond (three solid lines)
+    - 1.5 → aromatic bond (dashed line)
 
 ---
 
