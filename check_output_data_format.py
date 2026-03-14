@@ -1,8 +1,11 @@
 """
 Validate that a pre-built PyG dataset (data.pt) is compatible with this project.
 
+Expects the dataset under a timestamped folder: dataset_root / dataset_name / data.pt
+(e.g. results/datasets/<timestamp>/data.pt). By default uses the latest such folder.
+
 Checks performed:
-- data_root / dataset_name / data.pt exists and can be loaded via MProV3Dataset
+- dataset_root / dataset_name / data.pt exists and can be loaded via MProV3Dataset
 - A small sample of graphs has the expected attributes and shapes:
   - x: float32, shape (N, 4)  (x, y, z, atomic_number)
   - edge_index: long, shape (2, E)
@@ -21,6 +24,7 @@ Exit code:
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
@@ -29,7 +33,8 @@ import torch
 
 from config import (
     DEFAULT_DATA_ROOT,
-    DEFAULT_PYG_DATASET_NAME,
+    DEFAULT_RESULTS_ROOT,
+    RESULTS_DATASETS,
     DEFAULT_TRAIN_SPLIT_FILE,
     DEFAULT_VAL_SPLIT_FILE,
     DEFAULT_TEST_SPLIT_FILE,
@@ -40,6 +45,7 @@ from dataset import (
     get_train_val_test_indices,
     load_dataset_pdb_order,
 )
+from utils import RunLogger, get_latest_timestamp_dir, run_timestamp
 
 
 @dataclass
@@ -339,7 +345,8 @@ def _check_pdb_order_file(
 
 
 def _check_split_indices_in_range(
-    data_root: Path,
+    dataset_root: Path,
+    splits_root: Path,
     dataset_name: str,
     dataset_len: int,
     train_split_file: str,
@@ -349,11 +356,11 @@ def _check_split_indices_in_range(
     fold_index: int,
 ) -> List[CheckResult]:
     results: List[CheckResult] = []
-    pdb_order = load_dataset_pdb_order(data_root, dataset_name)
+    pdb_order = load_dataset_pdb_order(dataset_root, dataset_name)
 
     try:
         train_idx, val_idx, test_idx = get_train_val_test_indices(
-            data_root=data_root,
+            data_root=splits_root,
             train_file=train_split_file,
             val_file=val_split_file,
             test_file=test_split_file,
@@ -408,7 +415,8 @@ def _check_split_indices_in_range(
 
 
 def run_checks(
-    data_root: Path,
+    dataset_root: Path,
+    splits_root: Path,
     dataset_name: str,
     train_split_file: str,
     val_split_file: str,
@@ -419,13 +427,13 @@ def run_checks(
 ) -> Tuple[bool, List[CheckResult]]:
     all_results: List[CheckResult] = []
 
-    all_results.extend(_check_dataset_file_exists(data_root, dataset_name))
+    all_results.extend(_check_dataset_file_exists(dataset_root, dataset_name))
 
     # If the dataset file is missing, deeper checks will just fail noisily; bail out early.
     if any(not r.ok for r in all_results):
         return False, all_results
 
-    load_results, dataset = _load_dataset(data_root, dataset_name)
+    load_results, dataset = _load_dataset(dataset_root, dataset_name)
     all_results.extend(load_results)
 
     if dataset is None:
@@ -440,14 +448,15 @@ def run_checks(
     )
     all_results.extend(
         _check_pdb_order_file(
-            data_root=data_root,
+            data_root=dataset_root,
             dataset_name=dataset_name,
             dataset_len=len(dataset),
         )
     )
     all_results.extend(
         _check_split_indices_in_range(
-            data_root=data_root,
+            dataset_root=dataset_root,
+            splits_root=splits_root,
             dataset_name=dataset_name,
             dataset_len=len(dataset),
             train_split_file=train_split_file,
@@ -465,8 +474,9 @@ def run_checks(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Validate that a PyG dataset (data.pt) under --data_root/--dataset_name "
-            "is compatible with this project's training and evaluation scripts."
+            "Validate that a PyG dataset (data.pt) under a timestamped folder "
+            "(e.g. results/datasets/<timestamp>/) is compatible with this project's "
+            "training and evaluation scripts. Uses latest timestamp by default."
         )
     )
     parser.add_argument(
@@ -474,18 +484,16 @@ def _parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "Path to MPro-URV_Version3_snapshot (or compatible dataset root). "
-            f"Default: {DEFAULT_DATA_ROOT}"
+            "Path to the folder containing timestamped dataset(s) (e.g. results/datasets), "
+            "or path to a specific dataset folder (e.g. results/datasets/2025-03-14_120000). "
+            f"Default: {DEFAULT_RESULTS_ROOT}/datasets (uses latest timestamp subfolder)"
         ),
     )
     parser.add_argument(
-        "--dataset_name",
+        "--splits_root",
         type=str,
-        default=DEFAULT_PYG_DATASET_NAME,
-        help=(
-            "Name of the PyG dataset folder under data_root (contains data.pt "
-            f"and pdb_order.txt). Default: {DEFAULT_PYG_DATASET_NAME}"
-        ),
+        default=None,
+        help=f"Path to raw MPro snapshot (Splits/). Default: {DEFAULT_DATA_ROOT}",
     )
     parser.add_argument(
         "--train_split_file",
@@ -528,35 +536,79 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    data_root = Path(args.data_root or DEFAULT_DATA_ROOT)
+    results_root = Path(DEFAULT_RESULTS_ROOT)
+    dataset_root = None
+    dataset_name = None
 
-    print(
-        f"Checking PyG output dataset under: {data_root} / {args.dataset_name} "
-        f"(fold_index={args.fold_index}, num_folds={args.num_folds})"
-    )
-
-    ok, results = run_checks(
-        data_root=data_root,
-        dataset_name=args.dataset_name,
-        train_split_file=args.train_split_file,
-        val_split_file=args.val_split_file,
-        test_split_file=args.test_split_file,
-        num_folds=args.num_folds,
-        fold_index=args.fold_index,
-        num_classes=args.num_classes,
-    )
-
-    for r in results:
-        status = "OK" if r.ok else "ERROR"
-        print(f"[{status}] {r.message}")
-
-    if ok:
-        print("All output-data-format checks passed.")
+    if args.data_root:
+        p = Path(args.data_root)
+        if (p / "data.pt").exists():
+            dataset_root = p.parent
+            dataset_name = p.name
+        else:
+            latest = get_latest_timestamp_dir(p)
+            if latest is not None:
+                dataset_root = p
+                dataset_name = latest.name
     else:
-        print(
-            "One or more output-data-format checks FAILED. "
-            "See messages above for details."
+        dataset_base = results_root / RESULTS_DATASETS
+        latest = get_latest_timestamp_dir(dataset_base)
+        if latest is not None:
+            dataset_root = dataset_base
+            dataset_name = latest.name
+
+    if dataset_root is None or dataset_name is None:
+        missing_base = Path(args.data_root) if args.data_root else results_root / RESULTS_DATASETS
+        msg = (
+            f"No timestamped dataset folder found under {missing_base}. "
+            "Run build_dataset.py first; it writes to results/datasets/<timestamp>/."
         )
+        ts = run_timestamp()
+        log_dir = results_root / "check_format" / "datasets" / ts
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "check_output.log"
+        with RunLogger(log_path) as log:
+            log.log(f"[ERROR] {msg}")
+        print(msg, file=sys.stderr)
+        sys.exit(1)
+
+    splits_root = Path(args.splits_root or DEFAULT_DATA_ROOT)
+
+    ts = run_timestamp()
+    log_dir = results_root / "check_format" / "datasets" / ts
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "check_output.log"
+
+    with RunLogger(log_path) as log:
+        log.log(
+            f"Checking PyG output dataset: {dataset_root} / {dataset_name} "
+            f"(splits from {splits_root}, fold_index={args.fold_index}, num_folds={args.num_folds})"
+        )
+
+        ok, results = run_checks(
+            dataset_root=dataset_root,
+            splits_root=splits_root,
+            dataset_name=dataset_name,
+            train_split_file=args.train_split_file,
+            val_split_file=args.val_split_file,
+            test_split_file=args.test_split_file,
+            num_folds=args.num_folds,
+            fold_index=args.fold_index,
+            num_classes=args.num_classes,
+        )
+
+        for r in results:
+            status = "OK" if r.ok else "ERROR"
+            log.log(f"[{status}] {r.message}")
+
+        if ok:
+            log.log("All output-data-format checks passed.")
+        else:
+            log.log(
+                "One or more output-data-format checks FAILED. "
+                "See messages above for details."
+            )
+        log.log(f"Log written to {log_path}")
 
     raise SystemExit(0 if ok else 1)
 

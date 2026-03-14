@@ -3,9 +3,23 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-# Default data root: MPro-URV_Version3_snapshot (sibling of gnn_version3 folder)
-DEFAULT_DATA_ROOT = str(Path(__file__).resolve().parent.parent / "MPro-URV_Version3_snapshot")
-# Default name of the PyG dataset folder under data_root (contains data.pt)
+_PROJECT_ROOT = Path(__file__).resolve().parent
+
+# Default data root: MPro-URV_Version3_snapshot (sibling of gnn_version3 folder) — raw input data
+DEFAULT_DATA_ROOT = str(_PROJECT_ROOT.parent / "MPro-URV_Version3_snapshot")
+
+# All script outputs go under results/
+DEFAULT_RESULTS_ROOT = str(_PROJECT_ROOT / "results")
+RESULTS_VISUALIZATIONS = "visualizations"
+RESULTS_TRAININGS = "trainings"
+RESULTS_CLASSIFICATIONS = "classifications"
+RESULTS_DATASETS = "datasets"
+RESULTS_CHECK_FORMAT = "check_format"
+# Default roots for check scripts: dataset to validate at results/check_format/datasets, raw data at results/check_format/raw_data
+RESULTS_CHECK_DATASETS = "check_format/datasets"
+RESULTS_CHECK_RAW_DATA = "check_format/raw_data"
+
+# Default name of the PyG dataset folder under results/datasets/ (contains data.pt)
 DEFAULT_PYG_DATASET_NAME = "processed_pyg"
 
 

@@ -3,14 +3,12 @@ Visualize a subset of ligand graphs from a built PyG dataset (data.pt).
 
 Uses RDKit's 2D drawer (MolDraw2D) for publication-quality graphics. For each
 selected graph this script:
-- Uses (x, y) coordinates only (z is dropped, no projection).
-- Builds an RDKit molecule from the graph and draws it with correct bond styles:
-  - single: one central line
-  - double: two shifted parallel lines
-  - triple: two shifted lines plus one central line
-  - aromatic: dashed line
-- Saves PNG and SVG (vector) under report/input/graphs.
-- Writes an HTML report with PDB ID, category, and node/edge tables.
+- Builds an RDKit molecule from the graph and sets the full 3D conformer (x, y, z).
+- Generates optimal 2D coordinates from the 3D structure via
+  GenerateDepictionMatching3DStructure(), so the drawing respects 3D layout.
+- Bond styles: single = one central line; double = two shifted lines;
+  triple = two shifted + central; aromatic = dashed.
+- Saves PNG and SVG under report/input/graphs; writes HTML reports with tables.
 
 Usage (examples):
     uv run python visualize_graphs.py
@@ -23,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -31,10 +30,12 @@ import torch
 from rdkit import Chem
 from rdkit.Chem import Draw
 from rdkit.Chem import BondType as RkBondType
+from rdkit.Chem import rdDepictor
 from rdkit.Geometry import Point3D
 
-from config import DEFAULT_DATA_ROOT, DEFAULT_PYG_DATASET_NAME
+from config import DEFAULT_RESULTS_ROOT, RESULTS_VISUALIZATIONS
 from dataset import MProV3Dataset, load_dataset_pdb_order
+from utils import RunLogger, get_latest_timestamp_dir, html_document, html_escape, run_timestamp
 
 # Image size in pixels (RDKit drawer uses this for PNG/SVG canvas).
 _DRAW_SIZE = 500
@@ -99,12 +100,12 @@ def _mol_from_graph(
     atomic_numbers: torch.Tensor,
     edge_index: torch.Tensor,
     edge_attr: torch.Tensor,
-    pos_xy: np.ndarray,
+    pos_3d: np.ndarray,
 ) -> Chem.Mol:
     """
-    Build an RDKit molecule from the PyG graph using (x, y) only for the 2D conformer.
+    Build an RDKit molecule from the PyG graph with a 3D conformer (x, y, z).
 
-    - pos_xy: (N, 2) array (x, y); z is not used.
+    - pos_3d: (N, 3) array (x, y, z). Used for GenerateDepictionMatching3DStructure.
     """
     anum = atomic_numbers.detach().cpu().numpy()
     n = len(anum)
@@ -119,9 +120,40 @@ def _mol_from_graph(
         return mol
     conf = Chem.Conformer(n)
     for i in range(n):
-        conf.SetAtomPosition(i, Point3D(float(pos_xy[i, 0]), float(pos_xy[i, 1]), 0.0))
+        conf.SetAtomPosition(
+            i,
+            Point3D(
+                float(pos_3d[i, 0]),
+                float(pos_3d[i, 1]),
+                float(pos_3d[i, 2]),
+            ),
+        )
     mol.AddConformer(conf, assignId=True)
     return mol
+
+
+def _generate_2d_from_3d(mol: Chem.Mol) -> None:
+    """
+    Generate 2D coordinates that mimic the molecule's 3D structure.
+
+    Uses RDKit's GenerateDepictionMatching3DStructure so the final 2D
+    depiction preserves spatial relationships from the 3D conformer.
+    Modifies mol in place (replaces/adds 2D conformer).
+    """
+    if mol.GetNumAtoms() == 0:
+        return
+    try:
+        # reference = same molecule with 3D; confId=0 is the conformer we added
+        rdDepictor.GenerateDepictionMatching3DStructure(
+            mol,
+            mol,
+            confId=0,
+            acceptFailure=True,
+            forceRDKit=False,
+        )
+    except Exception:
+        # Fallback: standard 2D coords from topology only (ignores 3D)
+        rdDepictor.Compute2DCoords(mol, clearConfs=True)
 
 
 def draw_graph(
@@ -135,14 +167,15 @@ def draw_graph(
     """
     Draw a single molecular graph with RDKit (MolDraw2D) and save PNG (and optionally SVG).
 
-    Uses (x, y) only from pos3d; z is dropped. Bond drawing follows chemistry conventions:
+    Uses full 3D positions to build the molecule; RDKit generates optimal 2D coordinates
+    from the 3D structure (GenerateDepictionMatching3DStructure). Bond drawing:
     single = one central line, double = two shifted lines, triple = two shifted + central,
     aromatic = dashed.
     """
-    pos_np = pos3d.detach().cpu().numpy()
-    pos_xy = pos_np[:, :2].copy()  # (N, 2), drop z
+    pos_3d = pos3d.detach().cpu().numpy()  # (N, 3)
 
-    mol = _mol_from_graph(atomic_numbers, edge_index, edge_attr, pos_xy)
+    mol = _mol_from_graph(atomic_numbers, edge_index, edge_attr, pos_3d)
+    _generate_2d_from_3d(mol)
     if mol.GetNumAtoms() == 0:
         out_path_png.parent.mkdir(parents=True, exist_ok=True)
         out_path_png.write_bytes(b"")
@@ -170,16 +203,6 @@ def draw_graph(
         out_path_svg.write_text(drawer_svg.GetDrawingText(), encoding="utf-8")
 
 
-def _html_escape(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
-    )
-
-
 def write_html_report(
     out_dir: Path,
     image_filename: str,
@@ -199,52 +222,38 @@ def write_html_report(
     - node and edge tables
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    html_path = out_dir / f"{pdb_id}.html"
 
     pos_np = pos3d.detach().cpu().numpy()
     atomic_np = atomic_numbers.detach().cpu().numpy()
     unique_edges = _unique_undirected_edges(edge_index, edge_attr)
 
-    lines: List[str] = []
-    lines.append("<!DOCTYPE html>")
-    lines.append("<html lang='en'>")
-    lines.append("<head>")
-    lines.append("<meta charset='utf-8' />")
-    lines.append(f"<title>MPro ligand graph: {_html_escape(pdb_id)}</title>")
-    lines.append(
-        "<style>"
+    style = (
         "body { font-family: sans-serif; } "
         "table { border-collapse: collapse; margin-bottom: 1.5em; } "
         "th, td { border: 1px solid #ccc; padding: 4px 8px; font-size: 12px; } "
         "th { background: #f0f0f0; }"
-        "</style>"
     )
-    lines.append("</head>")
-    lines.append("<body>")
-    lines.append(f"<h1>MPro ligand graph: {_html_escape(pdb_id)}</h1>")
-
-    lines.append("<p>")
-    lines.append(f"<strong>PDB ID</strong>: {_html_escape(pdb_id)}<br/>")
+    body: List[str] = [
+        f"<h1>MPro ligand graph: {html_escape(pdb_id)}</h1>",
+        "<p>",
+        f"<strong>PDB ID</strong>: {html_escape(pdb_id)}<br/>",
+    ]
     if category is not None:
-        lines.append(f"<strong>Category (class index)</strong>: {category}<br/>")
+        body.append(f"<strong>Category (class index)</strong>: {category}<br/>")
     if pIC50 is not None:
-        lines.append(f"<strong>pIC50</strong>: {pIC50:.3f}<br/>")
-    lines.append("</p>")
-
-    lines.append(f"<p><img src='{_html_escape(image_filename)}' alt='Graph {pdb_id}'/></p>")
+        body.append(f"<strong>pIC50</strong>: {pIC50:.3f}<br/>")
+    body.append("</p>")
+    body.append(f"<p><img src='{html_escape(image_filename)}' alt='Graph {pdb_id}'/></p>")
     if svg_filename:
-        lines.append(
-            f"<p><a href='{_html_escape(svg_filename)}'>Vector (SVG)</a></p>"
-        )
+        body.append(f"<p><a href='{html_escape(svg_filename)}'>Vector (SVG)</a></p>")
 
-    # Node table.
-    lines.append("<h2>Nodes (atoms)</h2>")
-    lines.append("<table>")
-    lines.append("<tr><th>Index</th><th>Atomic number</th><th>x</th><th>y</th><th>z</th></tr>")
+    body.append("<h2>Nodes (atoms)</h2>")
+    body.append("<table>")
+    body.append("<tr><th>Index</th><th>Atomic number</th><th>x</th><th>y</th><th>z</th></tr>")
     for idx in range(pos_np.shape[0]):
         x, y, z = pos_np[idx]
         zn = int(atomic_np[idx])
-        lines.append(
+        body.append(
             "<tr>"
             f"<td>{idx}</td>"
             f"<td>{zn}</td>"
@@ -253,26 +262,73 @@ def write_html_report(
             f"<td>{z:.4f}</td>"
             "</tr>"
         )
-    lines.append("</table>")
-
-    # Edge table.
-    lines.append("<h2>Edges (bonds)</h2>")
-    lines.append("<table>")
-    lines.append("<tr><th>Source</th><th>Target</th><th>bond_scalar</th><th>bond_type</th></tr>")
+    body.append("</table>")
+    body.append("<h2>Edges (bonds)</h2>")
+    body.append("<table>")
+    body.append("<tr><th>Source</th><th>Target</th><th>bond_scalar</th><th>bond_type</th></tr>")
     for u, v, scalar in unique_edges:
         visual = bond_scalar_to_visual(scalar)
-        lines.append(
+        body.append(
             "<tr>"
             f"<td>{u}</td>"
             f"<td>{v}</td>"
             f"<td>{scalar:.2f}</td>"
-            f"<td>{_html_escape(visual.label)}</td>"
+            f"<td>{html_escape(visual.label)}</td>"
             "</tr>"
         )
-    lines.append("</table>")
+    body.append("</table>")
 
-    lines.append("</body></html>")
-    html_path.write_text("\n".join(lines), encoding="utf-8")
+    html = html_document(f"MPro ligand graph: {html_escape(pdb_id)}", body, style=style)
+    (out_dir / f"{pdb_id}.html").write_text(html, encoding="utf-8")
+
+
+def write_index_html(
+    out_dir: Path,
+    entries: List[Tuple[str, Optional[int], Optional[float]]],
+) -> None:
+    """
+    Write an index.html page with thumbnail links to all generated graph reports.
+
+    entries: list of (pdb_id, category, pIC50) for each graph in this run.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    style = (
+        "body { font-family: sans-serif; max-width: 1200px; margin: 1em auto; padding: 0 1em; } "
+        ".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1em; } "
+        ".card { border: 1px solid #ccc; border-radius: 6px; overflow: hidden; text-align: center; } "
+        ".card a { text-decoration: none; color: inherit; display: block; } "
+        ".card img { width: 100%; height: auto; display: block; } "
+        ".card .label { padding: 0.5em; font-size: 14px; } "
+        ".card .meta { font-size: 12px; color: #666; } "
+        "h1 { margin-bottom: 0.5em; } "
+        ".timestamp { color: #666; font-size: 14px; margin-bottom: 1em; }"
+    )
+    body: List[str] = [
+        "<h1>MPro ligand graphs</h1>",
+        f"<p class='timestamp'>Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')} — {len(entries)} graphs</p>",
+        "<div class='grid'>",
+    ]
+    for pdb_id, category, pIC50 in entries:
+        safe_id = html_escape(pdb_id)
+        img_src = html_escape(f"{pdb_id}.png")
+        report_href = html_escape(f"{pdb_id}.html")
+        meta_parts = []
+        if category is not None:
+            meta_parts.append(f"Cat. {category}")
+        if pIC50 is not None:
+            meta_parts.append(f"pIC50 {pIC50:.2f}")
+        meta_str = html_escape(" · ".join(meta_parts)) if meta_parts else ""
+        body.append("<div class='card'>")
+        body.append(f"  <a href='{report_href}'>")
+        body.append(f"    <img src='{img_src}' alt='{safe_id}' loading='lazy' />")
+        body.append(f"    <span class='label'>{safe_id}</span>")
+        if meta_str:
+            body.append(f"    <span class='meta'>{meta_str}</span>")
+        body.append("  </a>")
+        body.append("</div>")
+    body.append("</div>")
+    html = html_document("MPro ligand graphs — index", body, style=style)
+    (out_dir / "index.html").write_text(html, encoding="utf-8")
 
 
 def _select_indices_from_args(
@@ -308,20 +364,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Draw a subset of ligand graphs from a built PyG dataset (data.pt) and "
-            "save images plus HTML reports to report/input/graphs."
+            "save images plus HTML reports to results/visualizations/."
         )
     )
     parser.add_argument(
-        "--data_root",
+        "--results_root",
         type=str,
         default=None,
-        help=f"Path to MPro-URV_Version3_snapshot (default: {DEFAULT_DATA_ROOT})",
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default=DEFAULT_PYG_DATASET_NAME,
-        help=f"Name of the PyG dataset folder under data_root (default: {DEFAULT_PYG_DATASET_NAME})",
+        help=f"Root for outputs (default: {DEFAULT_RESULTS_ROOT}); uses latest results_root/datasets/<timestamp>/, writes to results_root/visualizations/<timestamp>/.",
     )
     parser.add_argument(
         "--num_graphs",
@@ -353,14 +403,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    data_root = Path(args.data_root or DEFAULT_DATA_ROOT)
-    dataset_name = args.dataset_name
+    results_root = Path(args.results_root or DEFAULT_RESULTS_ROOT)
+    dataset_base = results_root / "datasets"
+    latest_dataset = get_latest_timestamp_dir(dataset_base)
+    if latest_dataset is None or not (latest_dataset / "data.pt").exists():
+        raise FileNotFoundError(
+            f"No dataset found under {dataset_base}. Run build_dataset.py with --results_root {results_root} first."
+        )
+    dataset_name = latest_dataset.name
 
-    if not data_root.exists():
-        raise FileNotFoundError(f"Data root does not exist: {data_root}")
-
-    ds = MProV3Dataset(root=str(data_root), dataset_name=dataset_name)
-    pdb_order = load_dataset_pdb_order(data_root, dataset_name)
+    ds = MProV3Dataset(root=str(dataset_base), dataset_name=dataset_name)
+    pdb_order = load_dataset_pdb_order(dataset_base, dataset_name)
 
     selected_indices = _select_indices_from_args(
         ds=ds,
@@ -370,64 +423,72 @@ def main() -> None:
         pdb_ids=args.pdb_ids,
     )
 
-    project_root = Path(__file__).resolve().parent
-    output_dir = project_root / "report" / "input" / "graphs"
+    ts = run_timestamp()
+    output_dir = results_root / RESULTS_VISUALIZATIONS / ts
     output_dir.mkdir(parents=True, exist_ok=True)
+    log_path = output_dir / "visualize.log"
 
-    print(f"Loaded dataset with {len(ds)} graphs from {data_root / dataset_name / 'data.pt'}")
-    print(f"Writing {len(selected_indices)} graphs to {output_dir}")
+    index_entries: List[Tuple[str, Optional[int], Optional[float]]] = []
 
-    for idx in selected_indices:
-        g = ds[idx]
-        # x: [x, y, z, atomic_number]
-        x = g.x
-        pos3d = x[:, :3]
-        atomic_numbers = x[:, 3].round().to(torch.long)
-        edge_index = g.edge_index
-        edge_attr = g.edge_attr
+    with RunLogger(log_path) as log:
+        log.log(f"Dataset: {dataset_base / dataset_name} (latest)")
+        log.log(f"Output: {output_dir}")
+        log.log(f"Loaded {len(ds)} graphs; writing {len(selected_indices)} graphs")
 
-        pdb_id = getattr(g, "pdb_id", f"idx_{idx}")
-        pdb_id_str = str(pdb_id)
-        category = None
-        if hasattr(g, "category"):
-            try:
-                category = int(g.category.view(-1)[0].item())
-            except Exception:
-                category = None
-        pIC50 = None
-        if hasattr(g, "pIC50"):
-            try:
-                pIC50 = float(g.pIC50.view(-1)[0].item())
-            except Exception:
-                pIC50 = None
+        for idx in selected_indices:
+            g = ds[idx]
+            # x: [x, y, z, atomic_number]
+            x = g.x
+            pos3d = x[:, :3]
+            atomic_numbers = x[:, 3].round().to(torch.long)
+            edge_index = g.edge_index
+            edge_attr = g.edge_attr
 
-        img_filename = f"{pdb_id_str}.png"
-        img_path = output_dir / img_filename
-        svg_path = (output_dir / f"{pdb_id_str}.svg") if args.svg else None
+            pdb_id = getattr(g, "pdb_id", f"idx_{idx}")
+            pdb_id_str = str(pdb_id)
+            category = None
+            if hasattr(g, "category"):
+                try:
+                    category = int(g.category.view(-1)[0].item())
+                except Exception:
+                    category = None
+            pIC50 = None
+            if hasattr(g, "pIC50"):
+                try:
+                    pIC50 = float(g.pIC50.view(-1)[0].item())
+                except Exception:
+                    pIC50 = None
 
-        draw_graph(
-            pos3d=pos3d,
-            edge_index=edge_index,
-            edge_attr=edge_attr,
-            atomic_numbers=atomic_numbers,
-            out_path_png=img_path,
-            out_path_svg=svg_path,
-        )
+            img_filename = f"{pdb_id_str}.png"
+            img_path = output_dir / img_filename
+            svg_path = (output_dir / f"{pdb_id_str}.svg") if args.svg else None
 
-        write_html_report(
-            out_dir=output_dir,
-            image_filename=img_filename,
-            pdb_id=pdb_id_str,
-            category=category,
-            pIC50=pIC50,
-            pos3d=pos3d,
-            atomic_numbers=atomic_numbers,
-            edge_index=edge_index,
-            edge_attr=edge_attr,
-            svg_filename=f"{pdb_id_str}.svg" if args.svg else None,
-        )
+            draw_graph(
+                pos3d=pos3d,
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                atomic_numbers=atomic_numbers,
+                out_path_png=img_path,
+                out_path_svg=svg_path,
+            )
 
-    print("Done.")
+            write_html_report(
+                out_dir=output_dir,
+                image_filename=img_filename,
+                pdb_id=pdb_id_str,
+                category=category,
+                pIC50=pIC50,
+                pos3d=pos3d,
+                atomic_numbers=atomic_numbers,
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                svg_filename=f"{pdb_id_str}.svg" if args.svg else None,
+            )
+            index_entries.append((pdb_id_str, category, pIC50))
+
+        write_index_html(output_dir, index_entries)
+        log.log(f"Index: {output_dir / 'index.html'}")
+        log.log("Done.")
 
 
 if __name__ == "__main__":

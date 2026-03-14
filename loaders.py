@@ -26,19 +26,21 @@ def collate_batch(
 
 
 def create_data_loaders(
+    dataset_root: Path,
     data_root: Path,
     split_config: SplitConfig,
     batch_size: int = 32,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Build train, validation, and test DataLoaders. Loads the PyG dataset from
-    data_root/split_config.dataset_name (must exist; run build_dataset.py first).
+    dataset_root/split_config.dataset_name (must exist; run build_dataset.py first).
+    Splits are read from data_root/Splits/ (raw MPro snapshot).
     """
     dataset = MProV3Dataset(
-        root=str(data_root),
+        root=str(dataset_root),
         dataset_name=split_config.dataset_name,
     )
-    dataset_pdb_order = load_dataset_pdb_order(data_root, split_config.dataset_name)
+    dataset_pdb_order = load_dataset_pdb_order(dataset_root, split_config.dataset_name)
     train_idx, val_idx, test_idx = get_train_val_test_indices(
         data_root,
         split_config.train_file,

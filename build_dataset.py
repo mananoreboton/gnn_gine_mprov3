@@ -1,24 +1,26 @@
 """
 Build the PyG dataset from SDFs and Info.csv. Run this once before training.
-The resulting dataset is loaded by the rest of the code; if missing, an error is shown.
+The resulting dataset is saved under results/datasets/<timestamp>/.
 """
 
 import argparse
 from pathlib import Path
 
-from config import DEFAULT_DATA_ROOT, DEFAULT_PYG_DATASET_NAME
+import torch
+
+from config import DEFAULT_DATA_ROOT, DEFAULT_RESULTS_ROOT, RESULTS_DATASETS
 from dataset import load_activity_and_category, sdf_to_graph
 from tqdm import tqdm
-import torch
+from utils import RunLogger, run_timestamp
 
 
 def build_and_save_pyg_dataset(
     data_root: Path,
-    dataset_name: str = DEFAULT_PYG_DATASET_NAME,
+    out_dir: Path,
 ) -> Path:
     """
-    Build PyG graph list from SDFs and Info.csv and save to data_root/dataset_name/data.pt.
-    Returns the path to the saved file.
+    Build PyG graph list from SDFs and Info.csv and save to out_dir (e.g. results/datasets/<timestamp>/).
+    Returns the path to the saved data.pt.
     """
     sdf_dir = data_root / "Ligand" / "Ligand_SDF"
     if not sdf_dir.exists():
@@ -26,7 +28,7 @@ def build_and_save_pyg_dataset(
     pIC50_dict, category_dict = load_activity_and_category(data_root)
     pdb_ids = sorted(pIC50_dict.keys())
     data_list = []
-    dataset_pdb_order = []  # PDB IDs actually included, in dataset index order
+    dataset_pdb_order = []
     for pdb_id in tqdm(pdb_ids, desc="Building PyG dataset"):
         sdf_path = sdf_dir / f"{pdb_id}_ligand.sdf"
         if not sdf_path.exists():
@@ -39,13 +41,11 @@ def build_and_save_pyg_dataset(
         g.pdb_id = pdb_id
         data_list.append(g)
         dataset_pdb_order.append(pdb_id)
-    out_dir = data_root / dataset_name
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "data.pt"
-    # PyG InMemoryDataset.load() expects (data.to_dict(), slices, data.__class__)
     from torch_geometric.data import InMemoryDataset
+
     InMemoryDataset.save(data_list, str(out_path))
-    # Save dataset PDB order so split indices map to dataset indices (not Info.csv order)
     pdb_order_path = out_dir / "pdb_order.txt"
     pdb_order_path.write_text("\n".join(dataset_pdb_order))
     return out_path
@@ -59,20 +59,31 @@ def main() -> None:
         "--data_root",
         type=str,
         default=None,
-        help="Path to MPro-URV_Version3_snapshot",
+        help="Path to raw MPro snapshot (Ligand/, Info.csv); default: config.DEFAULT_DATA_ROOT",
     )
     parser.add_argument(
-        "--dataset_name",
+        "--results_root",
         type=str,
-        default=DEFAULT_PYG_DATASET_NAME,
-        help=f"Name of the PyG dataset folder under data_root (default: {DEFAULT_PYG_DATASET_NAME})",
+        default=None,
+        help=f"Root for outputs (default: {DEFAULT_RESULTS_ROOT}); dataset written to results_root/datasets/<timestamp>/.",
     )
     args = parser.parse_args()
     data_root = Path(args.data_root or DEFAULT_DATA_ROOT)
+    results_root = Path(args.results_root or DEFAULT_RESULTS_ROOT)
     if not data_root.exists():
         raise FileNotFoundError(f"Data root not found: {data_root}")
-    path = build_and_save_pyg_dataset(data_root, args.dataset_name)
-    print(f"PyG dataset saved to {path}")
+
+    ts = run_timestamp()
+    out_dir = results_root / RESULTS_DATASETS / ts
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_path = out_dir / "build.log"
+
+    with RunLogger(log_path) as log:
+        log.log(f"Building PyG dataset from {data_root}")
+        log.log(f"Output directory: {out_dir}")
+        path = build_and_save_pyg_dataset(data_root, out_dir)
+        log.log(f"PyG dataset saved to {path}")
+        log.log(f"Log written to {log_path}")
 
 
 if __name__ == "__main__":

@@ -89,6 +89,10 @@ def load_activity_and_category(
     return pIC50, category
 
 
+# Map class index (0, 1, 2) back to original Category (-1, 0, 1) for reporting.
+ORIGINAL_CATEGORY_FROM_CLASS: Dict[int, int] = {0: -1, 1: 0, 2: 1}
+
+
 def _parse_split_file(path: Path) -> List[List[str]]:
     """Parse a single Splits file (Python list of lists of PDB IDs)."""
     import ast

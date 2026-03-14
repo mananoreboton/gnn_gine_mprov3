@@ -1,27 +1,32 @@
 """
-Classify a trained GNN on the test set from the command line (classification only).
-Loads a saved checkpoint and reports test accuracy.
-Use the same split/fold and model architecture as training.
+Classify the test set on the trained GNN.
+Loads a saved checkpoint from the latest results/trainings/<timestamp>/ and reports test accuracy.
+Saves per-sample results to results/classifications/<timestamp>/ for report generation.
 Usage:
-  uv run python evaluate.py --data_root /path/to/snapshot [--checkpoint best_gnn.pt] [--fold_index 0]
+  uv run python evaluate.py [--data_root /path/to/snapshot] [--checkpoint best_gnn.pt] [--fold_index 0]
 """
 
 import argparse
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
 
 from config import (
     DEFAULT_DATA_ROOT,
-    DEFAULT_PYG_DATASET_NAME,
+    DEFAULT_RESULTS_ROOT,
+    RESULTS_TRAININGS,
+    RESULTS_CLASSIFICATIONS,
     DEFAULT_TRAIN_SPLIT_FILE,
     DEFAULT_VAL_SPLIT_FILE,
     DEFAULT_TEST_SPLIT_FILE,
     SplitConfig,
 )
+from evaluation import evaluate_test_with_predictions, print_test_report
 from gine_config import GineConfig
 from loaders import create_data_loaders
-from evaluation import evaluate_test, print_test_report
+from utils import RunLogger, get_latest_timestamp_dir, run_timestamp
 
 
 def _parse_args() -> argparse.Namespace:
@@ -32,19 +37,19 @@ def _parse_args() -> argparse.Namespace:
         "--data_root",
         type=str,
         default=None,
-        help="Path to MPro-URV_Version3_snapshot (default: ../MPro-URV_Version3_snapshot)",
+        help="Path to raw MPro snapshot (Splits/); default: config.DEFAULT_DATA_ROOT",
     )
     parser.add_argument(
-        "--dataset_name",
+        "--results_root",
         type=str,
-        default=DEFAULT_PYG_DATASET_NAME,
-        help=f"PyG dataset folder name under data_root (default: {DEFAULT_PYG_DATASET_NAME})",
+        default=None,
+        help=f"Root for outputs (default: {DEFAULT_RESULTS_ROOT}); uses latest trainings/ and datasets/, writes to classifications/<timestamp>/.",
     )
     parser.add_argument(
         "--checkpoint",
         type=str,
         default="best_gnn.pt",
-        help="Path to model checkpoint relative to data_root, or absolute path (default: best_gnn.pt)",
+        help="Checkpoint filename (default: best_gnn.pt); loaded from latest results_root/trainings/<timestamp>/.",
     )
     parser.add_argument(
         "--train_split_file",
@@ -77,14 +82,23 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     data_root = Path(args.data_root or DEFAULT_DATA_ROOT)
+    results_root = Path(args.results_root or DEFAULT_RESULTS_ROOT)
     if not data_root.exists():
         raise FileNotFoundError(f"Data root not found: {data_root}")
 
-    checkpoint_path = Path(args.checkpoint)
-    if not checkpoint_path.is_absolute():
-        checkpoint_path = data_root / checkpoint_path
+    trainings_base = results_root / RESULTS_TRAININGS
+    latest_training = get_latest_timestamp_dir(trainings_base)
+    if latest_training is None:
+        raise FileNotFoundError(f"No training run found under {trainings_base}. Run train.py first.")
+    checkpoint_path = latest_training / args.checkpoint
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    dataset_base = results_root / "datasets"
+    latest_dataset = get_latest_timestamp_dir(dataset_base)
+    if latest_dataset is None or not (latest_dataset / "data.pt").exists():
+        raise FileNotFoundError(f"No dataset found under {dataset_base}. Run build_dataset.py first.")
+    dataset_name = latest_dataset.name
 
     split_config = SplitConfig(
         train_file=args.train_split_file,
@@ -92,7 +106,7 @@ def main() -> None:
         test_file=args.test_split_file,
         num_folds=args.num_folds,
         fold_index=args.fold_index,
-        dataset_name=args.dataset_name,
+        dataset_name=dataset_name,
     )
     gine_config = GineConfig(
         in_channels=4,
@@ -103,16 +117,44 @@ def main() -> None:
     )
 
     _, _, test_loader = create_data_loaders(
-        data_root, split_config, batch_size=args.batch_size
+        dataset_base, data_root, split_config, batch_size=args.batch_size
     )
-    print(f"Test set size: {len(test_loader.dataset)}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = gine_config.build().to(device)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False))
 
-    test_metrics = evaluate_test(model, test_loader, device)
-    print_test_report(test_metrics)
+    test_metrics, results = evaluate_test_with_predictions(model, test_loader, device)
+
+    ts = run_timestamp()
+    out_dir = results_root / RESULTS_CLASSIFICATIONS / ts
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_path = out_dir / "evaluate.log"
+    results_path = out_dir / "evaluation_results.json"
+
+    payload = {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "data_root": str(data_root.resolve()),
+        "results_root": str(results_root.resolve()),
+        "dataset_name": dataset_name,
+        "fold_index": split_config.fold_index,
+        "num_folds": split_config.num_folds,
+        "accuracy": test_metrics.accuracy,
+        "results": [
+            {"pdb_id": pdb_id, "real_category": real, "predicted_category": pred}
+            for pdb_id, real, pred in results
+        ],
+    }
+    results_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    with RunLogger(log_path) as log:
+        log.log(f"Checkpoint: {checkpoint_path}")
+        log.log(f"Dataset: {dataset_base / dataset_name}")
+        log.log(f"Test set size: {len(test_loader.dataset)}")
+        log.log(f"Test accuracy (Category): {test_metrics.accuracy:.4f}")
+        print_test_report(test_metrics)
+        log.log(f"Results saved to {results_path}")
+        log.log(f"Log written to {log_path}")
 
 
 if __name__ == "__main__":

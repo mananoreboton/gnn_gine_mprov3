@@ -25,6 +25,7 @@ import pandas as pd
 
 from config import (
     DEFAULT_DATA_ROOT,
+    DEFAULT_RESULTS_ROOT,
     DEFAULT_TRAIN_SPLIT_FILE,
     DEFAULT_VAL_SPLIT_FILE,
     DEFAULT_TEST_SPLIT_FILE,
@@ -34,6 +35,7 @@ from dataset import (
     load_splits,
     sdf_to_graph,
 )
+from utils import RunLogger, run_timestamp
 
 
 @dataclass
@@ -384,10 +386,7 @@ def _parse_args() -> argparse.Namespace:
         "--data_root",
         type=str,
         default=None,
-        help=(
-            "Path to MPro-URV_Version3_snapshot (or compatible dataset). "
-            f"Default: {DEFAULT_DATA_ROOT}"
-        ),
+        help=f"Path to raw MPro snapshot (Info.csv, Ligand/, Splits/). Default: {DEFAULT_DATA_ROOT}",
     )
     parser.add_argument(
         "--train_split_file",
@@ -420,26 +419,33 @@ def main() -> None:
     args = _parse_args()
     data_root = Path(args.data_root or DEFAULT_DATA_ROOT)
 
-    print(f"Checking raw dataset at: {data_root}")
-    ok, results = run_checks(
-        data_root=data_root,
-        train_split_file=args.train_split_file,
-        val_split_file=args.val_split_file,
-        test_split_file=args.test_split_file,
-        num_folds=args.num_folds,
-    )
+    ts = run_timestamp()
+    log_dir = Path(DEFAULT_RESULTS_ROOT) / "check_format" / "raw_data" / ts
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "check_input.log"
 
-    for r in results:
-        status = "OK" if r.ok else "ERROR"
-        print(f"[{status}] {r.message}")
-
-    if ok:
-        print("All input-data-format checks passed.")
-    else:
-        print(
-            "One or more input-data-format checks FAILED. "
-            "See messages above for details."
+    with RunLogger(log_path) as log:
+        log.log(f"Checking raw dataset at: {data_root}")
+        ok, results = run_checks(
+            data_root=data_root,
+            train_split_file=args.train_split_file,
+            val_split_file=args.val_split_file,
+            test_split_file=args.test_split_file,
+            num_folds=args.num_folds,
         )
+
+        for r in results:
+            status = "OK" if r.ok else "ERROR"
+            log.log(f"[{status}] {r.message}")
+
+        if ok:
+            log.log("All input-data-format checks passed.")
+        else:
+            log.log(
+                "One or more input-data-format checks FAILED. "
+                "See messages above for details."
+            )
+        log.log(f"Log written to {log_path}")
 
     raise SystemExit(0 if ok else 1)
 
