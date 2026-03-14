@@ -34,7 +34,7 @@ from rdkit.Chem import rdDepictor
 from rdkit.Geometry import Point3D
 
 from config import DEFAULT_RESULTS_ROOT, RESULTS_VISUALIZATIONS
-from dataset import MProV3Dataset, load_dataset_pdb_order
+from dataset import MProV3Dataset, ORIGINAL_CATEGORY_FROM_CLASS, load_dataset_pdb_order
 from utils import RunLogger, get_latest_timestamp_dir, html_document, html_escape, run_timestamp
 
 # Image size in pixels (RDKit drawer uses this for PNG/SVG canvas).
@@ -239,7 +239,7 @@ def write_html_report(
         f"<strong>PDB ID</strong>: {html_escape(pdb_id)}<br/>",
     ]
     if category is not None:
-        body.append(f"<strong>Category (class index)</strong>: {category}<br/>")
+        body.append(f"<strong>Category</strong>: {category}<br/>")
     if pIC50 is not None:
         body.append(f"<strong>pIC50</strong>: {pIC50:.3f}<br/>")
     body.append("</p>")
@@ -446,12 +446,18 @@ def main() -> None:
 
             pdb_id = getattr(g, "pdb_id", f"idx_{idx}")
             pdb_id_str = str(pdb_id)
-            category = None
+            category_class = None
             if hasattr(g, "category"):
                 try:
-                    category = int(g.category.view(-1)[0].item())
+                    category_class = int(g.category.view(-1)[0].item())
                 except Exception:
-                    category = None
+                    category_class = None
+            # Show category in original scale (-1, 0, 1) for display
+            category = (
+                ORIGINAL_CATEGORY_FROM_CLASS.get(category_class, category_class)
+                if category_class is not None
+                else None
+            )
             pIC50 = None
             if hasattr(g, "pIC50"):
                 try:

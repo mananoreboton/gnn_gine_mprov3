@@ -63,16 +63,16 @@ flowchart TB
         VizLog[visualize.log]
     end
 
-    subgraph check_in [check_input_data_format.py]
-        CheckInCLI[check_input_data_format.py]
+    subgraph check_in [check_raw_data_format.py]
+        CheckInCLI[check_raw_data_format.py]
     end
 
     subgraph out_check_raw [results/check_format/raw_data/&lt;ts&gt;/]
         CheckInLog[check_input.log]
     end
 
-    subgraph check_out [check_output_data_format.py]
-        CheckOutCLI[check_output_data_format.py]
+    subgraph check_out [check_PyG_data_format.py]
+        CheckOutCLI[check_PyG_data_format.py]
     end
 
     subgraph out_check_ds [results/check_format/datasets/&lt;ts&gt;/]
@@ -129,8 +129,8 @@ flowchart TB
         EvalScript[evaluate.py]
         ReportScript[create_evaluation_report.py]
         VizScript[visualize_graphs.py]
-        CheckInScript[check_input_data_format.py]
-        CheckOutScript[check_output_data_format.py]
+        CheckInScript[check_raw_data_format.py]
+        CheckOutScript[check_PyG_data_format.py]
     end
 
     subgraph shared [Shared]
@@ -201,8 +201,8 @@ All script outputs live under **`results/`** (config: `DEFAULT_RESULTS_ROOT`). E
 | `results/trainings/<timestamp>/` | `train.py` (`best_gnn.pt`) | `train.log` |
 | `results/classifications/<timestamp>/` | `evaluate.py` (`evaluation_results.json`), `create_evaluation_report.py` (HTML, `graphs/`) | `evaluate.log`, `create_evaluation_report.log` |
 | `results/visualizations/<timestamp>/` | `visualize_graphs.py` (PNG/SVG/HTML) | `visualize.log` |
-| `results/check_format/datasets/<timestamp>/` | `check_output_data_format.py` (log only) | `check_output.log` |
-| `results/check_format/raw_data/<timestamp>/` | `check_input_data_format.py` (log only) | `check_input.log` |
+| `results/check_format/datasets/<timestamp>/` | `check_PyG_data_format.py` (log only) | `check_output.log` |
+| `results/check_format/raw_data/<timestamp>/` | `check_raw_data_format.py` (log only) | `check_input.log` |
 
 Raw input (MPro snapshot with `Info.csv`, `Ligand/`, `Splits/`) stays at `--data_root` (default: `config.DEFAULT_DATA_ROOT`). Splits are always read from that raw root. Shared helpers (timestamps, latest-folder resolution, HTML, run logging) live in **`utils.py`**.
 
@@ -233,10 +233,10 @@ Before building the dataset, you can check that your raw MPro snapshot has the e
 
 ```bash
 # Default data_root = config.DEFAULT_DATA_ROOT
-uv run python check_input_data_format.py
+uv run python check_raw_data_format.py
 
 # Custom raw data path
-uv run python check_input_data_format.py --data_root /path/to/MPro-URV_Version3_snapshot
+uv run python check_raw_data_format.py --data_root /path/to/MPro-URV_Version3_snapshot
 ```
 
 If the check fails, the script exits with code 1 and prints `[ERROR]` lines. Log is written to `results/check_format/raw_data/<timestamp>/check_input.log`.
@@ -261,15 +261,41 @@ After building, you can verify that the PyG dataset and split indices are compat
 
 ```bash
 # Default: latest results/datasets/<ts>/, splits from config.DEFAULT_DATA_ROOT
-uv run python check_output_data_format.py
+uv run python check_PyG_data_format.py
 
 # Custom splits location (raw MPro snapshot)
-uv run python check_output_data_format.py --splits_root /path/to/MPro-URV_Version3_snapshot
+uv run python check_PyG_data_format.py --splits_root /path/to/MPro-URV_Version3_snapshot
 ```
 
 Log is written to `results/check_format/datasets/<timestamp>/check_output.log`.
 
-### 2. Train (train.py)
+### 2. Visualize ligand graphs (visualize_graphs.py)
+
+Draws a subset of ligand graphs using **RDKit's 2D drawer** (MolDraw2D) for publication-quality figures. By default loads the **latest** `results/datasets/<timestamp>/` and writes to `results/visualizations/<timestamp>/`. **Category is shown in the original scale (-1, 0, 1)** (low / medium / high potency). Layout uses **(x, y) only** (z is dropped). Bond styles follow chemistry conventions: single = one central line; double = two shifted lines; triple = two shifted lines plus one central line; aromatic = dashed.
+
+```bash
+# Default: first 16 graphs from latest dataset, output = results/visualizations/<timestamp>/
+uv run python visualize_graphs.py
+
+# Specify how many graphs to draw
+uv run python visualize_graphs.py --num_graphs 32
+
+# Select by dataset indices or PDB IDs
+uv run python visualize_graphs.py --indices 0 1 2 10 25
+uv run python visualize_graphs.py --pdb_ids 5R83 6LU7
+
+# Also write vector SVG files (for figures)
+uv run python visualize_graphs.py --svg
+```
+
+Output under **`results/visualizations/<timestamp>/`**:
+
+- `PDB_ID.png`: 2D drawing (RDKit MolDraw2D).
+- `PDB_ID.svg`: vector graphic (only with `--svg`).
+- `PDB_ID.html`: report with PDB ID, category (-1/0/1), pIC50, and tables for nodes (atomic number, x, y, z) and edges (bond type).
+- `index.html`: index of all visualized graphs; `visualize.log`: run log.
+
+### 3. Train (train.py)
 
 Training loads the **latest** `results/datasets/<timestamp>/` and reads splits from **three files** in `data_root/Splits/`:
 
@@ -325,7 +351,7 @@ uv run python train.py \
 
 The best model (by validation accuracy) is saved as `results/trainings/<timestamp>/best_gnn.pt`. Training does not run evaluation; use `evaluate.py` for that.
 
-### 3. Evaluate (evaluate.py) — run independently
+### 4. Evaluate (evaluate.py) — run independently
 
 Evaluate a saved checkpoint on the test set without running training. By default uses the **latest** `results/trainings/<timestamp>/` (for the checkpoint) and **latest** `results/datasets/<timestamp>/` (for the test set). Use the same split/fold and model architecture as when the model was trained. **Categories are reported in the original scale (-1, 0, 1)** (low / medium / high potency). Results are saved to `results/classifications/<timestamp>/evaluation_results.json` for use by the evaluation report script.
 
@@ -342,7 +368,7 @@ uv run python evaluate.py --data_root /path/to/snapshot --fold_index 2 --hidden 
 
 Options: `--data_root`, `--results_root`, `--checkpoint` (filename in latest `results/trainings/<ts>/`), `--train_split_file`, `--val_split_file`, `--test_split_file`, `--num_folds`, `--fold_index`, `--batch_size`, `--hidden`, `--num_layers`, `--dropout`, `--num_classes` (must match the trained model).
 
-#### 3.1. Evaluation report (create_evaluation_report.py)
+#### 4.1. Evaluation report (create_evaluation_report.py)
 
 After running `evaluate.py`, generate an HTML report with graph thumbnails and per-sample real vs predicted category. By default uses the **latest** `results/classifications/<timestamp>/evaluation_results.json` and writes the report into that same folder.
 
@@ -360,32 +386,6 @@ Output is written into the same **`results/classifications/<timestamp>/`** folde
 - **`graphs/<PDB_ID>.png`**: graph image per test sample.
 - **`<PDB_ID>.html`**: per-sample page with image, PDB ID, real category (-1/0/1), predicted category (-1/0/1).
 - **`create_evaluation_report.log`**: run log.
-
-### 4. Visualize ligand graphs (visualize_graphs.py)
-
-Draws a subset of ligand graphs using **RDKit’s 2D drawer** (MolDraw2D) for publication-quality figures. By default loads the **latest** `results/datasets/<timestamp>/` and writes to `results/visualizations/<timestamp>/`. Layout uses **(x, y) only** (z is dropped). Bond styles follow chemistry conventions: single = one central line; double = two shifted lines; triple = two shifted lines plus one central line; aromatic = dashed.
-
-```bash
-# Default: first 16 graphs from latest dataset, output = results/visualizations/<timestamp>/
-uv run python visualize_graphs.py
-
-# Specify how many graphs to draw
-uv run python visualize_graphs.py --num_graphs 32
-
-# Select by dataset indices or PDB IDs
-uv run python visualize_graphs.py --indices 0 1 2 10 25
-uv run python visualize_graphs.py --pdb_ids 5R83 6LU7
-
-# Also write vector SVG files (for figures)
-uv run python visualize_graphs.py --svg
-```
-
-Output under **`results/visualizations/<timestamp>/`**:
-
-- `PDB_ID.png`: 2D drawing (RDKit MolDraw2D).
-- `PDB_ID.svg`: vector graphic (only with `--svg`).
-- `PDB_ID.html`: report with PDB ID, category, pIC50, and tables for nodes (atomic number, x, y, z) and edges (bond type).
-- `index.html`: index of all visualized graphs; `visualize.log`: run log.
 
 ---
 
@@ -472,8 +472,8 @@ print_test_report(test_metrics)
 | **dataset.py** | Helpers: `sdf_to_graph`, `load_activity_and_category`; `load_splits` (three files); `get_train_val_test_indices`; `MProV3Dataset` (loads pre-built PyG dataset, errors if missing). |
 | **utils.py** | `run_timestamp()`, `get_latest_timestamp_dir()`, `html_escape()`, `html_document()`, `RunLogger` (tee to file + stdout). |
 | **build_dataset.py** | Builds PyG dataset to `results/datasets/<timestamp>/` (no dataset_name); writes `build.log`. |
-| **check_input_data_format.py** | CLI: validate raw dataset at `--data_root`; writes `results/check_format/raw_data/<timestamp>/check_input.log`. |
-| **check_output_data_format.py** | CLI: validate built dataset (default: latest `results/datasets/<timestamp>/`); writes `results/check_format/datasets/<timestamp>/check_output.log`. |
+| **check_raw_data_format.py** | CLI: validate raw dataset at `--data_root`; writes `results/check_format/raw_data/<timestamp>/check_input.log`. |
+| **check_PyG_data_format.py** | CLI: validate built dataset (default: latest `results/datasets/<timestamp>/`); writes `results/check_format/datasets/<timestamp>/check_output.log`. |
 | **loaders.py** | `collate_batch`, `create_data_loaders(dataset_root, data_root, ...)` (dataset under `results/datasets/`, splits from raw root). |
 | **train_epoch.py** | One-epoch training step: `train_one_epoch`. |
 | **validation.py** | Validation: `evaluate_validation`, `ValidationMetrics`. |
