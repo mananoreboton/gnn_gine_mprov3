@@ -123,7 +123,7 @@ Or with pip:
 pip install -r requirements.txt
 ```
 
-Requires: PyTorch, PyTorch Geometric, RDKit, pandas, numpy, scikit-learn, matplotlib.
+Requires: PyTorch, PyTorch Geometric, RDKit, pandas, numpy, scikit-learn.
 
 ---
 
@@ -239,7 +239,7 @@ Options: `--data_root`, `--dataset_name`, `--checkpoint` (path relative to data_
 
 ### 4. Visualize ligand graphs (visualize_graphs.py)
 
-You can draw a subset of ligand graphs from the built PyG dataset (`data.pt`) and save one image per PDB ID plus a small HTML report containing node/edge tables.
+Draws a subset of ligand graphs using **RDKit’s 2D drawer** (MolDraw2D) for publication-quality figures. Layout uses **(x, y) only** (z is dropped). Bond styles follow chemistry conventions: single = one central line; double = two shifted lines; triple = two shifted lines plus one central line; aromatic = dashed.
 
 ```bash
 # Default: first 16 graphs from the default dataset
@@ -248,23 +248,19 @@ uv run python visualize_graphs.py
 # Specify how many graphs to draw
 uv run python visualize_graphs.py --num_graphs 32
 
-# Select by dataset indices
+# Select by dataset indices or PDB IDs
 uv run python visualize_graphs.py --indices 0 1 2 10 25
-
-# Select by PDB IDs (requires pdb_order.txt written by build_dataset.py)
 uv run python visualize_graphs.py --pdb_ids 5R83 6LU7
+
+# Also write vector SVG files (for figures)
+uv run python visualize_graphs.py --svg
 ```
 
-Output is written under `report/input/graphs`:
+Output under `report/input/graphs`:
 
-- `PDB_ID.png`: 2D drawing of the molecular graph.
-- `PDB_ID.html`: report with PDB ID, category, pIC50 (if available), and tables for:
-  - nodes (atoms) with atomic number and (x, y, z) coordinates
-  - edges (bonds) with bond scalar and bond type:
-    - 1.0 → single bond (one solid line)
-    - 2.0 → double bond (two solid lines)
-    - 3.0 → triple bond (three solid lines)
-    - 1.5 → aromatic bond (dashed line)
+- `PDB_ID.png`: 2D drawing (RDKit MolDraw2D).
+- `PDB_ID.svg`: vector graphic (only with `--svg`).
+- `PDB_ID.html`: report with PDB ID, category, pIC50, and tables for nodes (atomic number, x, y, z) and edges (bond type).
 
 ---
 
@@ -350,3 +346,4 @@ print_test_report(test_metrics)
 | **evaluation.py** | Evaluation: `evaluate_test`, `TestMetrics`, `print_test_report`. |
 | **train.py** | CLI: train only; saves best checkpoint. |
 | **evaluate.py** | CLI: load a checkpoint and evaluate on the test set (no training). |
+| **visualize_graphs.py** | CLI: draw a subset of graphs from `data.pt` with RDKit (PNG/SVG and HTML reports to `report/input/graphs`). |

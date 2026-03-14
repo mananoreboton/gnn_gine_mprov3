@@ -1,20 +1,16 @@
 """
 Visualize a subset of ligand graphs from a built PyG dataset (data.pt).
 
-For each selected graph, this script:
-- draws the molecular graph using node positions from (x, y, z) features
-- styles bonds according to bond type scalar:
-  - 1.0  -> single bond   (one solid line)
-  - 2.0  -> double bond   (two parallel solid lines)
-  - 3.0  -> triple bond   (three parallel solid lines)
-  - 1.5  -> aromatic bond (one dashed line)
-- saves the image as <PDB_ID>.png under report/input/graphs
-- writes a small HTML report <PDB_ID>.html in the same folder containing:
-  - PDB ID
-  - category label (class index)
-  - optional pIC50 value (if present)
-  - node table: index, atomic_number, x, y, z
-  - edge table (unique undirected bonds): src, dst, bond_scalar, bond_type
+Uses RDKit's 2D drawer (MolDraw2D) for publication-quality graphics. For each
+selected graph this script:
+- Uses (x, y) coordinates only (z is dropped, no projection).
+- Builds an RDKit molecule from the graph and draws it with correct bond styles:
+  - single: one central line
+  - double: two shifted parallel lines
+  - triple: two shifted lines plus one central line
+  - aromatic: dashed line
+- Saves PNG and SVG (vector) under report/input/graphs.
+- Writes an HTML report with PDB ID, category, and node/edge tables.
 
 Usage (examples):
     uv run python visualize_graphs.py
@@ -28,53 +24,51 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from rdkit import Chem
+from rdkit.Chem import Draw
+from rdkit.Chem import BondType as RkBondType
+from rdkit.Geometry import Point3D
 
 from config import DEFAULT_DATA_ROOT, DEFAULT_PYG_DATASET_NAME
 from dataset import MProV3Dataset, load_dataset_pdb_order
 
+# Image size in pixels (RDKit drawer uses this for PNG/SVG canvas).
+_DRAW_SIZE = 500
+
 
 @dataclass(frozen=True)
 class BondVisual:
-    """Visual style for a bond."""
+    """Human-readable bond type for reports."""
 
-    n_lines: int           # 1, 2, or 3
-    linestyle: str         # "-" or "--"
-    label: str             # human-readable type
+    label: str
 
 
 def bond_scalar_to_visual(value: float) -> BondVisual:
-    """Map stored scalar bond type to a visual representation."""
-    # Values are produced by dataset._bond_type_to_scalar:
-    # Single=1.0, Double=2.0, Triple=3.0, Aromatic=1.5 (default 1.0).
+    """Map stored scalar bond type to a label (single/double/triple/aromatic)."""
     if np.isclose(value, 1.0):
-        return BondVisual(n_lines=1, linestyle="-", label="single")
+        return BondVisual(label="single")
     if np.isclose(value, 2.0):
-        return BondVisual(n_lines=2, linestyle="-", label="double")
+        return BondVisual(label="double")
     if np.isclose(value, 3.0):
-        return BondVisual(n_lines=3, linestyle="-", label="triple")
+        return BondVisual(label="triple")
     if np.isclose(value, 1.5):
-        return BondVisual(n_lines=1, linestyle="--", label="aromatic")
-    # Fallback: treat as single bond.
-    return BondVisual(n_lines=1, linestyle="-", label=f"unknown({value:.2f})")
+        return BondVisual(label="aromatic")
+    return BondVisual(label=f"unknown({value:.2f})")
 
 
-def _normalize_positions(pos2d: np.ndarray) -> np.ndarray:
-    """
-    Normalize 2D positions to roughly [0, 1] range for stable plotting.
-
-    pos2d: (N, 2) array.
-    """
-    if pos2d.size == 0:
-        return pos2d
-    min_vals = pos2d.min(axis=0, keepdims=True)
-    max_vals = pos2d.max(axis=0, keepdims=True)
-    span = np.clip(max_vals - min_vals, 1e-6, None)
-    return (pos2d - min_vals) / span
+def _bond_scalar_to_rdkit(value: float) -> RkBondType:
+    """Map stored bond scalar to RDKit BondType for correct drawing."""
+    if np.isclose(value, 2.0):
+        return RkBondType.DOUBLE
+    if np.isclose(value, 3.0):
+        return RkBondType.TRIPLE
+    if np.isclose(value, 1.5):
+        return RkBondType.AROMATIC
+    return RkBondType.SINGLE
 
 
 def _unique_undirected_edges(
@@ -101,107 +95,79 @@ def _unique_undirected_edges(
     return [(u, v, s) for (u, v), s in seen.items()]
 
 
+def _mol_from_graph(
+    atomic_numbers: torch.Tensor,
+    edge_index: torch.Tensor,
+    edge_attr: torch.Tensor,
+    pos_xy: np.ndarray,
+) -> Chem.Mol:
+    """
+    Build an RDKit molecule from the PyG graph using (x, y) only for the 2D conformer.
+
+    - pos_xy: (N, 2) array (x, y); z is not used.
+    """
+    anum = atomic_numbers.detach().cpu().numpy()
+    n = len(anum)
+    mol = Chem.RWMol()
+    for i in range(n):
+        mol.AddAtom(Chem.Atom(int(anum[i])))
+    for u, v, scalar in _unique_undirected_edges(edge_index, edge_attr):
+        bt = _bond_scalar_to_rdkit(scalar)
+        mol.AddBond(int(u), int(v), bt)
+    mol = mol.GetMol()
+    if n == 0:
+        return mol
+    conf = Chem.Conformer(n)
+    for i in range(n):
+        conf.SetAtomPosition(i, Point3D(float(pos_xy[i, 0]), float(pos_xy[i, 1]), 0.0))
+    mol.AddConformer(conf, assignId=True)
+    return mol
+
+
 def draw_graph(
     pos3d: torch.Tensor,
     edge_index: torch.Tensor,
     edge_attr: torch.Tensor,
     atomic_numbers: torch.Tensor,
-    title: str,
-    out_path: Path,
+    out_path_png: Path,
+    out_path_svg: Optional[Path] = None,
 ) -> None:
     """
-    Draw a single molecular graph and save as a PNG image.
+    Draw a single molecular graph with RDKit (MolDraw2D) and save PNG (and optionally SVG).
 
-    - pos3d: (N, 3) node positions (x, y, z)
-    - edge_index: (2, E) edges (directed)
-    - edge_attr: (E, 1) bond scalars
-    - atomic_numbers: (N,) atomic numbers used for node labels
+    Uses (x, y) only from pos3d; z is dropped. Bond drawing follows chemistry conventions:
+    single = one central line, double = two shifted lines, triple = two shifted + central,
+    aromatic = dashed.
     """
-    pos3d_np = pos3d.detach().cpu().numpy()
-    # Use (x, y) coordinates and normalize for visualization.
-    pos2d = pos3d_np[:, :2]
-    pos2d = _normalize_positions(pos2d)
+    pos_np = pos3d.detach().cpu().numpy()
+    pos_xy = pos_np[:, :2].copy()  # (N, 2), drop z
 
-    unique_edges = _unique_undirected_edges(edge_index, edge_attr)
+    mol = _mol_from_graph(atomic_numbers, edge_index, edge_attr, pos_xy)
+    if mol.GetNumAtoms() == 0:
+        out_path_png.parent.mkdir(parents=True, exist_ok=True)
+        out_path_png.write_bytes(b"")
+        if out_path_svg:
+            out_path_svg.write_text("<!-- empty molecule -->", encoding="utf-8")
+        return
 
-    fig, ax = plt.subplots(figsize=(4, 4))
+    w = h = _DRAW_SIZE
+    out_path_png.parent.mkdir(parents=True, exist_ok=True)
 
-    # Draw bonds with appropriate styles.
-    for u, v, scalar in unique_edges:
-        x1, y1 = pos2d[u]
-        x2, y2 = pos2d[v]
-        visual = bond_scalar_to_visual(scalar)
+    # Prefer MolDraw2DCairo (best quality); fall back to MolToImage if Cairo not built.
+    try:
+        drawer = Draw.rdMolDraw2D.MolDraw2DCairo(w, h)
+        drawer.DrawMolecule(mol)
+        drawer.FinishDrawing()
+        drawer.WriteDrawingText(str(out_path_png))
+    except (AttributeError, OSError):
+        img = Draw.MolToImage(mol, size=(w, h))
+        img.save(out_path_png)
 
-        # Direction vector and perpendicular for multi-line bonds.
-        dx, dy = x2 - x1, y2 - y1
-        length = np.hypot(dx, dy)
-        if length < 1e-6:
-            # Degenerate; draw a point-like edge.
-            ax.plot([x1], [y1], color="black", linestyle=visual.linestyle, linewidth=1.0)
-            continue
-        # Perpendicular unit vector for offset.
-        px, py = -dy / length, dx / length
-        offset = 0.02  # small offset for double/triple bonds
-
-        if visual.n_lines == 1:
-            ax.plot(
-                [x1, x2],
-                [y1, y2],
-                color="black",
-                linestyle=visual.linestyle,
-                linewidth=1.5,
-            )
-        elif visual.n_lines == 2:
-            for sign in (-1, 1):
-                ox = px * offset * sign
-                oy = py * offset * sign
-                ax.plot(
-                    [x1 + ox, x2 + ox],
-                    [y1 + oy, y2 + oy],
-                    color="black",
-                    linestyle=visual.linestyle,
-                    linewidth=1.2,
-                )
-        else:  # triple bond
-            # Center line plus two offset lines.
-            ax.plot(
-                [x1, x2],
-                [y1, y2],
-                color="black",
-                linestyle=visual.linestyle,
-                linewidth=1.4,
-            )
-            for sign in (-1, 1):
-                ox = px * offset * sign
-                oy = py * offset * sign
-                ax.plot(
-                    [x1 + ox, x2 + ox],
-                    [y1 + oy, y2 + oy],
-                    color="black",
-                    linestyle=visual.linestyle,
-                    linewidth=1.1,
-                )
-
-    # Draw atoms as points with atomic number labels.
-    xs, ys = pos2d[:, 0], pos2d[:, 1]
-    ax.scatter(xs, ys, s=80, c="white", edgecolors="black", zorder=3)
-    for idx, (x, y, zn) in enumerate(zip(xs, ys, atomic_numbers.tolist())):
-        ax.text(
-            x,
-            y,
-            str(int(zn)),
-            ha="center",
-            va="center",
-            fontsize=8,
-            zorder=4,
-        )
-
-    ax.set_title(title, fontsize=10)
-    ax.set_axis_off()
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
+    if out_path_svg is not None:
+        drawer_svg = Draw.rdMolDraw2D.MolDraw2DSVG(w, h)
+        drawer_svg.DrawMolecule(mol)
+        drawer_svg.FinishDrawing()
+        out_path_svg.write_text(drawer_svg.GetDrawingText(), encoding="utf-8")
 
 
 def _html_escape(text: str) -> str:
@@ -224,6 +190,7 @@ def write_html_report(
     atomic_numbers: torch.Tensor,
     edge_index: torch.Tensor,
     edge_attr: torch.Tensor,
+    svg_filename: Optional[str] = None,
 ) -> None:
     """
     Write an HTML report for a single graph including:
@@ -265,6 +232,10 @@ def write_html_report(
     lines.append("</p>")
 
     lines.append(f"<p><img src='{_html_escape(image_filename)}' alt='Graph {pdb_id}'/></p>")
+    if svg_filename:
+        lines.append(
+            f"<p><a href='{_html_escape(svg_filename)}'>Vector (SVG)</a></p>"
+        )
 
     # Node table.
     lines.append("<h2>Nodes (atoms)</h2>")
@@ -372,6 +343,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="PDB IDs to visualize (requires pdb_order.txt built by build_dataset.py).",
     )
+    parser.add_argument(
+        "--svg",
+        action="store_true",
+        help="Also save vector SVG files for publication-quality figures.",
+    )
     return parser.parse_args()
 
 
@@ -427,14 +403,15 @@ def main() -> None:
 
         img_filename = f"{pdb_id_str}.png"
         img_path = output_dir / img_filename
+        svg_path = (output_dir / f"{pdb_id_str}.svg") if args.svg else None
 
         draw_graph(
             pos3d=pos3d,
             edge_index=edge_index,
             edge_attr=edge_attr,
             atomic_numbers=atomic_numbers,
-            title=pdb_id_str,
-            out_path=img_path,
+            out_path_png=img_path,
+            out_path_svg=svg_path,
         )
 
         write_html_report(
@@ -447,6 +424,7 @@ def main() -> None:
             atomic_numbers=atomic_numbers,
             edge_index=edge_index,
             edge_attr=edge_attr,
+            svg_filename=f"{pdb_id_str}.svg" if args.svg else None,
         )
 
     print("Done.")
