@@ -24,11 +24,17 @@ from typing import List, Tuple
 import pandas as pd
 
 from config import (
+    CHECK_FORMAT_RAW_DATA_SUBDIR,
     DEFAULT_DATA_ROOT,
     DEFAULT_RESULTS_ROOT,
+    DEFAULT_TEST_SPLIT_FILE,
     DEFAULT_TRAIN_SPLIT_FILE,
     DEFAULT_VAL_SPLIT_FILE,
-    DEFAULT_TEST_SPLIT_FILE,
+    MPRO_INFO_CSV,
+    MPRO_LIGAND_DIR,
+    MPRO_LIGAND_SDF_SUBDIR,
+    MPRO_SPLITS_DIR,
+    RESULTS_CHECK_FORMAT,
 )
 from dataset import (
     load_activity_and_category,
@@ -50,7 +56,7 @@ def _check_paths_exist(data_root: Path) -> List[CheckResult]:
     if not data_root.exists():
         return [CheckResult(False, f"Data root does not exist: {data_root}")]
 
-    info_path = data_root / "Info.csv"
+    info_path = data_root / MPRO_INFO_CSV
     if info_path.exists():
         results.append(CheckResult(True, f"Found Info.csv at {info_path}"))
     else:
@@ -58,7 +64,7 @@ def _check_paths_exist(data_root: Path) -> List[CheckResult]:
             CheckResult(False, f"Missing Info.csv at expected location: {info_path}")
         )
 
-    sdf_dir = data_root / "Ligand" / "Ligand_SDF"
+    sdf_dir = data_root / MPRO_LIGAND_DIR / MPRO_LIGAND_SDF_SUBDIR
     if sdf_dir.exists() and sdf_dir.is_dir():
         results.append(CheckResult(True, f"Found SDF directory at {sdf_dir}"))
     else:
@@ -70,7 +76,7 @@ def _check_paths_exist(data_root: Path) -> List[CheckResult]:
             )
         )
 
-    splits_dir = data_root / "Splits"
+    splits_dir = data_root / MPRO_SPLITS_DIR
     if splits_dir.exists() and splits_dir.is_dir():
         results.append(CheckResult(True, f"Found Splits directory at {splits_dir}"))
     else:
@@ -86,7 +92,7 @@ def _check_paths_exist(data_root: Path) -> List[CheckResult]:
 
 def _check_info_csv(data_root: Path) -> List[CheckResult]:
     results: List[CheckResult] = []
-    info_path = data_root / "Info.csv"
+    info_path = data_root / MPRO_INFO_CSV
     if not info_path.exists():
         # This is already reported by _check_paths_exist, avoid duplicate error here.
         return results
@@ -175,7 +181,7 @@ def _check_splits(
     num_folds: int,
 ) -> List[CheckResult]:
     results: List[CheckResult] = []
-    splits_dir = data_root / "Splits"
+    splits_dir = data_root / MPRO_SPLITS_DIR
 
     train_path = splits_dir / train_file
     val_path = splits_dir / val_file
@@ -270,7 +276,7 @@ def _sample_pdb_ids_for_sdf_check(
     max_samples: int = 20,
 ) -> List[str]:
     """Return up to max_samples PDB IDs from Info.csv to test SDF parsing."""
-    info_path = data_root / "Info.csv"
+    info_path = data_root / MPRO_INFO_CSV
     if not info_path.exists():
         return []
     try:
@@ -284,7 +290,7 @@ def _sample_pdb_ids_for_sdf_check(
 def _check_sdf_files_and_graphs(data_root: Path) -> List[CheckResult]:
     results: List[CheckResult] = []
 
-    sdf_dir = data_root / "Ligand" / "Ligand_SDF"
+    sdf_dir = data_root / MPRO_LIGAND_DIR / MPRO_LIGAND_SDF_SUBDIR
     if not sdf_dir.exists():
         # Already flagged in _check_paths_exist; nothing to add.
         return results
@@ -420,7 +426,9 @@ def main() -> None:
     data_root = Path(args.data_root or DEFAULT_DATA_ROOT)
 
     ts = run_timestamp()
-    log_dir = Path(DEFAULT_RESULTS_ROOT) / "check_format" / "raw_data" / ts
+    log_dir = (
+        Path(DEFAULT_RESULTS_ROOT) / RESULTS_CHECK_FORMAT / CHECK_FORMAT_RAW_DATA_SUBDIR / ts
+    )
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "check_input.log"
 

@@ -33,7 +33,7 @@ from rdkit.Chem import BondType as RkBondType
 from rdkit.Chem import rdDepictor
 from rdkit.Geometry import Point3D
 
-from config import DEFAULT_RESULTS_ROOT, RESULTS_VISUALIZATIONS
+from config import DEFAULT_RESULTS_ROOT, PYG_DATA_FILENAME, RESULTS_DATASETS, RESULTS_VISUALIZATIONS
 from dataset import MProV3Dataset, ORIGINAL_CATEGORY_FROM_CLASS, load_dataset_pdb_order
 from utils import RunLogger, get_latest_timestamp_dir, html_document, html_escape, run_timestamp
 
@@ -404,9 +404,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     results_root = Path(args.results_root or DEFAULT_RESULTS_ROOT)
-    dataset_base = results_root / "datasets"
+    dataset_base = results_root / RESULTS_DATASETS
     latest_dataset = get_latest_timestamp_dir(dataset_base)
-    if latest_dataset is None or not (latest_dataset / "data.pt").exists():
+    if latest_dataset is None or not (latest_dataset / PYG_DATA_FILENAME).exists():
         raise FileNotFoundError(
             f"No dataset found under {dataset_base}. Run build_dataset.py with --results_root {results_root} first."
         )

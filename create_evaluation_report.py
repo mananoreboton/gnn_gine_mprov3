@@ -14,7 +14,13 @@ from typing import Any, List
 
 import torch
 
-from config import DEFAULT_RESULTS_ROOT, RESULTS_CLASSIFICATIONS
+from config import (
+    DEFAULT_RESULTS_ROOT,
+    PYG_DATA_FILENAME,
+    PYG_PDB_ORDER_FILENAME,
+    RESULTS_CLASSIFICATIONS,
+    RESULTS_DATASETS,
+)
 from dataset import MProV3Dataset, load_dataset_pdb_order
 from utils import RunLogger, get_latest_timestamp_dir, html_document, html_escape
 from visualize_graphs import draw_graph
@@ -136,16 +142,16 @@ def main() -> None:
 
     results_root = payload.get("results_root")
     if results_root:
-        dataset_root = Path(results_root) / "datasets"
+        dataset_root = Path(results_root) / RESULTS_DATASETS
     else:
         dataset_root = Path(payload["data_root"])
-    if not (dataset_root / dataset_name / "data.pt").exists():
+    if not (dataset_root / dataset_name / PYG_DATA_FILENAME).exists():
         raise FileNotFoundError(f"Dataset not found at {dataset_root / dataset_name}")
 
     ds = MProV3Dataset(root=str(dataset_root), dataset_name=dataset_name)
     pdb_order = load_dataset_pdb_order(dataset_root, dataset_name)
     if pdb_order is None:
-        raise ValueError("pdb_order.txt missing; cannot resolve PDB IDs to graphs.")
+        raise ValueError(f"{PYG_PDB_ORDER_FILENAME} missing; cannot resolve PDB IDs to graphs.")
     pdb_to_idx = {p: i for i, p in enumerate(pdb_order)}
 
     graphs_dir = report_dir / "graphs"

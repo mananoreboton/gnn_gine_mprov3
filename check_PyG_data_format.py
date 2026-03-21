@@ -32,12 +32,16 @@ from typing import List, Tuple
 import torch
 
 from config import (
+    CHECK_FORMAT_DATASETS_SUBDIR,
     DEFAULT_DATA_ROOT,
     DEFAULT_RESULTS_ROOT,
-    RESULTS_DATASETS,
+    DEFAULT_TEST_SPLIT_FILE,
     DEFAULT_TRAIN_SPLIT_FILE,
     DEFAULT_VAL_SPLIT_FILE,
-    DEFAULT_TEST_SPLIT_FILE,
+    PYG_DATA_FILENAME,
+    PYG_PDB_ORDER_FILENAME,
+    RESULTS_CHECK_FORMAT,
+    RESULTS_DATASETS,
     SplitConfig,
 )
 from dataset import (
@@ -59,7 +63,7 @@ def _check_dataset_file_exists(
     dataset_name: str,
 ) -> List[CheckResult]:
     results: List[CheckResult] = []
-    dataset_path = data_root / dataset_name / "data.pt"
+    dataset_path = data_root / dataset_name / PYG_DATA_FILENAME
 
     if not data_root.exists():
         results.append(CheckResult(False, f"Data root does not exist: {data_root}"))
@@ -320,7 +324,7 @@ def _check_pdb_order_file(
         results.append(
             CheckResult(
                 False,
-                "Missing pdb_order.txt in the dataset folder. This file is required to "
+                f"Missing {PYG_PDB_ORDER_FILENAME} in the dataset folder. This file is required to "
                 "map split PDB IDs to dataset indices (it is written by build_dataset.py).",
             )
         )
@@ -330,7 +334,7 @@ def _check_pdb_order_file(
         results.append(
             CheckResult(
                 False,
-                f"pdb_order.txt contains {len(pdb_order)} entries, but dataset has "
+                f"{PYG_PDB_ORDER_FILENAME} contains {len(pdb_order)} entries, but dataset has "
                 f"{dataset_len} graphs; they must match.",
             )
         )
@@ -338,7 +342,7 @@ def _check_pdb_order_file(
         results.append(
             CheckResult(
                 True,
-                "pdb_order.txt exists and its length matches the dataset size.",
+                f"{PYG_PDB_ORDER_FILENAME} exists and its length matches the dataset size.",
             )
         )
     return results
@@ -542,7 +546,7 @@ def main() -> None:
 
     if args.data_root:
         p = Path(args.data_root)
-        if (p / "data.pt").exists():
+        if (p / PYG_DATA_FILENAME).exists():
             dataset_root = p.parent
             dataset_name = p.name
         else:
@@ -564,7 +568,7 @@ def main() -> None:
             "Run build_dataset.py first; it writes to results/datasets/<timestamp>/."
         )
         ts = run_timestamp()
-        log_dir = results_root / "check_format" / "datasets" / ts
+        log_dir = results_root / RESULTS_CHECK_FORMAT / CHECK_FORMAT_DATASETS_SUBDIR / ts
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "check_output.log"
         with RunLogger(log_path) as log:
@@ -575,7 +579,7 @@ def main() -> None:
     splits_root = Path(args.splits_root or DEFAULT_DATA_ROOT)
 
     ts = run_timestamp()
-    log_dir = results_root / "check_format" / "datasets" / ts
+    log_dir = results_root / RESULTS_CHECK_FORMAT / CHECK_FORMAT_DATASETS_SUBDIR / ts
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "check_output.log"
 

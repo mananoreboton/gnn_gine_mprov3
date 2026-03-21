@@ -2,6 +2,8 @@
 
 Python pipeline to train a Graph Neural Network on the MPro-URV Version 3 snapshot for **3-class classification** (Category: low / medium / high potency). The codebase is split into configuration, data loading, GINE model, and separate training, validation, and evaluation logic.
 
+**Shared defaults:** Numeric training, fold, and GINE architecture defaults come from the sibling package **`mprov3_gine_explainer_defaults`** (path dependency in `pyproject.toml`). Project-local paths, results layout strings, and **`SplitConfig`** live in **`config.py`**. The model class is **`MProGNN`** in **`model.py`** (constructed directly in `train.py` / `evaluate.py` with CLI overrides on top of shared defaults).
+
 ## Overview
 
 ### Pipeline: scripts, inputs and outputs
@@ -136,7 +138,6 @@ flowchart TB
     subgraph shared [Shared]
         Config[config.py]
         Utils[utils.py]
-        GineConfig[gine_config.py]
     end
 
     subgraph data_layer [Data]
@@ -168,7 +169,8 @@ flowchart TB
     Utils --> VizScript
     Utils --> CheckInScript
     Utils --> CheckOutScript
-    GineConfig --> Model
+    TrainScript --> Model
+    EvalScript --> Model
     Dataset --> Loaders
     Dataset --> BuildScript
     Loaders --> TrainScript
@@ -211,7 +213,7 @@ Raw input (MPro snapshot with `Info.csv`, `Ligand/`, `Splits/`) stays at `--data
 Using [uv](https://docs.astral.sh/uv/) (recommended):
 
 ```bash
-cd gnn_gine_mprov3
+cd mprov3_gine
 uv sync
 ```
 
@@ -236,7 +238,7 @@ Before building the dataset, you can check that your raw MPro snapshot has the e
 uv run python check_raw_data_format.py
 
 # Custom raw data path
-uv run python check_raw_data_format.py --data_root /path/to/MPro-URV_Version3_snapshot
+uv run python check_raw_data_format.py --data_root /path/to/mprov3_data
 ```
 
 If the check fails, the script exits with code 1 and prints `[ERROR]` lines. Log is written to `results/check_format/raw_data/<timestamp>/check_input.log`.
@@ -250,7 +252,7 @@ Train/val/test loaders use a **pre-built** PyG dataset. Create it from SDFs and 
 uv run python build_dataset.py
 
 # Custom raw data path and results root
-uv run python build_dataset.py --data_root /path/to/MPro-URV_Version3_snapshot --results_root results
+uv run python build_dataset.py --data_root /path/to/mprov3_data --results_root results
 ```
 
 Output: `results/datasets/<timestamp>/data.pt`, `pdb_order.txt`, `build.log`. If you skip this step, training will exit with an error telling you to run `build_dataset.py` first.
@@ -264,7 +266,7 @@ After building, you can verify that the PyG dataset and split indices are compat
 uv run python check_PyG_data_format.py
 
 # Custom splits location (raw MPro snapshot)
-uv run python check_PyG_data_format.py --splits_root /path/to/MPro-URV_Version3_snapshot
+uv run python check_PyG_data_format.py --splits_root /path/to/mprov3_data
 ```
 
 Log is written to `results/check_format/datasets/<timestamp>/check_output.log`.
@@ -307,7 +309,7 @@ Training loads the **latest** `results/datasets/<timestamp>/` and reads splits f
 uv run python train.py
 
 # Custom raw data path (for Splits/)
-uv run python train.py --data_root /path/to/MPro-URV_Version3_snapshot
+uv run python train.py --data_root /path/to/mprov3_data
 ```
 
 #### Split files and folds
@@ -340,9 +342,9 @@ uv run python train.py --hidden 128 --num_layers 4 --dropout 0.2
 #### Full example
 
 ```bash
-uv run python build_dataset.py --data_root /path/to/MPro-URV_Version3_snapshot
+uv run python build_dataset.py --data_root /path/to/mprov3_data
 uv run python train.py \
-  --data_root /path/to/MPro-URV_Version3_snapshot \
+  --data_root /path/to/mprov3_data \
   --num_folds 5 --fold_index 0 \
   --epochs 100 --batch_size 32 --lr 1e-3 \
   --hidden 64 --num_layers 3 --dropout 0.2 \
@@ -396,8 +398,8 @@ You can reuse configs, loaders, and train/val/test logic in your own scripts.
 #### Configuration
 
 - **`config.SplitConfig`**: train/val/test file names (`train_file`, `val_file`, `test_file`), `num_folds`, `fold_index`, `dataset_name` (PyG dataset folder).
-- **`config.TrainingConfig`**: training run (`epochs`, `batch_size`, `lr`, `seed`).
-- **`gine_config.GineConfig`**: GINE architecture (`in_channels`, `hidden_channels`, `num_layers`, `dropout`, `out_classes`). Call `.build()` to get an `MProGNN` instance.
+- **Training hyperparameters** (`epochs`, `batch_size`, `lr`, `seed`): defaults from **`mprov3_gine_explainer_defaults`**; `train.py` uses argparse (see `DEFAULT_TRAINING_EPOCHS`, `DEFAULT_BATCH_SIZE`, `DEFAULT_TRAINING_LR`, `DEFAULT_SEED`).
+- **`model.MProGNN`**: GINE architecture; construct with hyperparameters (defaults align with **`mprov3_gine_explainer_defaults`** e.g. `DEFAULT_IN_CHANNELS`, `DEFAULT_HIDDEN_CHANNELS`, …).
 
 #### Data loaders
 
@@ -423,30 +425,54 @@ You can reuse configs, loaders, and train/val/test logic in your own scripts.
 ```python
 from pathlib import Path
 import torch
-from config import SplitConfig, TrainingConfig
-from gine_config import GineConfig
+from mprov3_gine_explainer_defaults import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_DROPOUT,
+    DEFAULT_EDGE_DIM,
+    DEFAULT_HIDDEN_CHANNELS,
+    DEFAULT_IN_CHANNELS,
+    DEFAULT_NUM_LAYERS,
+    DEFAULT_OUT_CLASSES,
+    DEFAULT_POOL,
+    DEFAULT_TRAINING_EPOCHS,
+    DEFAULT_TRAINING_LR,
+)
+from config import SplitConfig
 from loaders import create_data_loaders
+from model import MProGNN
 from train_epoch import train_one_epoch
 from validation import evaluate_validation
 from evaluation import evaluate_test, print_test_report
 from utils import get_latest_timestamp_dir
 
-data_root = Path("/path/to/MPro-URV_Version3_snapshot")  # raw snapshot (Splits/, Info.csv)
+data_root = Path("/path/to/mprov3_data")  # raw snapshot (Splits/, Info.csv)
 dataset_base = Path("results/datasets")  # run build_dataset.py first
 latest_ds = get_latest_timestamp_dir(dataset_base)
 dataset_name = latest_ds.name if latest_ds else "2025-03-14_120000"  # or raise if None
 split_config = SplitConfig(num_folds=5, fold_index=0, dataset_name=dataset_name)
-training_config = TrainingConfig(epochs=50, batch_size=32, lr=1e-3)
-gine_config = GineConfig(hidden_channels=64, num_layers=3, dropout=0.2, out_classes=3)
+epochs = DEFAULT_TRAINING_EPOCHS
+batch_size = DEFAULT_BATCH_SIZE
+lr = DEFAULT_TRAINING_LR
+model = MProGNN(
+    in_channels=DEFAULT_IN_CHANNELS,
+    hidden_channels=DEFAULT_HIDDEN_CHANNELS,
+    num_layers=DEFAULT_NUM_LAYERS,
+    dropout=DEFAULT_DROPOUT,
+    out_classes=DEFAULT_OUT_CLASSES,
+    pool=DEFAULT_POOL,
+    edge_dim=DEFAULT_EDGE_DIM,
+)
 
-train_loader, val_loader, test_loader = create_data_loaders(dataset_base, data_root, split_config, training_config.batch_size)
+train_loader, val_loader, test_loader = create_data_loaders(
+    dataset_base, data_root, split_config, batch_size=batch_size
+)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = gine_config.build().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=training_config.lr)
+model = model.to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 criterion_ce = torch.nn.CrossEntropyLoss()
 
 # Training loop (simplified)
-for epoch in range(1, training_config.epochs + 1):
+for epoch in range(1, epochs + 1):
     train_one_epoch(model, train_loader, optimizer, device, criterion_ce)
     val_metrics = evaluate_validation(model, val_loader, device)
     # ... save best model by val_metrics.accuracy, etc.
@@ -466,9 +492,8 @@ print_test_report(test_metrics)
 
 | File | Role |
 |------|------|
-| **config.py** | Default paths, default split file names, `DEFAULT_PYG_DATASET_NAME`; `SplitConfig`, `TrainingConfig`. |
-| **gine_config.py** | GINE config: `GineConfig` dataclass and `.build()` → `MProGNN`. |
-| **model.py** | GINE model logic: `MProGNN`. |
+| **config.py** | Default paths, default split file names, `DEFAULT_PYG_DATASET_NAME`; `SplitConfig`. Training defaults: `mprov3_gine_explainer_defaults` + `train.py` argparse. |
+| **model.py** | GINE model: `MProGNN` (hyperparameter defaults align with `mprov3_gine_explainer_defaults`). |
 | **dataset.py** | Helpers: `sdf_to_graph`, `load_activity_and_category`; `load_splits` (three files); `get_train_val_test_indices`; `MProV3Dataset` (loads pre-built PyG dataset, errors if missing). |
 | **utils.py** | `run_timestamp()`, `get_latest_timestamp_dir()`, `html_escape()`, `html_document()`, `RunLogger` (tee to file + stdout). |
 | **build_dataset.py** | Builds PyG dataset to `results/datasets/<timestamp>/` (no dataset_name); writes `build.log`. |

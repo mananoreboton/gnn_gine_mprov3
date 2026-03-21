@@ -12,20 +12,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
+from mprov3_gine_explainer_defaults import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_DROPOUT,
+    DEFAULT_EDGE_DIM,
+    DEFAULT_FOLD_INDEX,
+    DEFAULT_HIDDEN_CHANNELS,
+    DEFAULT_IN_CHANNELS,
+    DEFAULT_NUM_FOLDS,
+    DEFAULT_NUM_LAYERS,
+    DEFAULT_OUT_CLASSES,
+    DEFAULT_POOL,
+)
 
 from config import (
     DEFAULT_DATA_ROOT,
     DEFAULT_RESULTS_ROOT,
-    RESULTS_TRAININGS,
-    RESULTS_CLASSIFICATIONS,
-    DEFAULT_TRAIN_SPLIT_FILE,
-    DEFAULT_VAL_SPLIT_FILE,
     DEFAULT_TEST_SPLIT_FILE,
+    DEFAULT_TRAIN_SPLIT_FILE,
+    DEFAULT_TRAINING_CHECKPOINT_FILENAME,
+    DEFAULT_VAL_SPLIT_FILE,
+    PYG_DATA_FILENAME,
+    RESULTS_CLASSIFICATIONS,
+    RESULTS_DATASETS,
+    RESULTS_TRAININGS,
     SplitConfig,
 )
 from evaluation import evaluate_test_with_predictions, print_test_report
-from gine_config import GineConfig
 from loaders import create_data_loaders
+from model import MProGNN
 from utils import RunLogger, get_latest_timestamp_dir, run_timestamp
 
 
@@ -48,8 +63,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="best_gnn.pt",
-        help="Checkpoint filename (default: best_gnn.pt); loaded from latest results_root/trainings/<timestamp>/.",
+        default=DEFAULT_TRAINING_CHECKPOINT_FILENAME,
+        help=f"Checkpoint filename (default: {DEFAULT_TRAINING_CHECKPOINT_FILENAME}); loaded from latest results_root/trainings/<timestamp>/.",
     )
     parser.add_argument(
         "--train_split_file",
@@ -69,13 +84,48 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_TEST_SPLIT_FILE,
         help=f"Test split file in Splits/ (default: {DEFAULT_TEST_SPLIT_FILE})",
     )
-    parser.add_argument("--num_folds", type=int, default=5, help="Number of folds (default: 5)")
-    parser.add_argument("--fold_index", type=int, default=0, help="Which fold to use (0 .. num_folds-1)")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for evaluation")
-    parser.add_argument("--hidden", type=int, default=64, help="Must match trained model")
-    parser.add_argument("--num_layers", type=int, default=3, help="Must match trained model")
-    parser.add_argument("--dropout", type=float, default=0.2, help="Must match trained model")
-    parser.add_argument("--num_classes", type=int, default=3, help="Number of classes (default: 3)")
+    parser.add_argument(
+        "--num_folds",
+        type=int,
+        default=DEFAULT_NUM_FOLDS,
+        help=f"Number of folds (default: {DEFAULT_NUM_FOLDS})",
+    )
+    parser.add_argument(
+        "--fold_index",
+        type=int,
+        default=DEFAULT_FOLD_INDEX,
+        help="Which fold to use (0 .. num_folds-1)",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help="Batch size for evaluation",
+    )
+    parser.add_argument(
+        "--hidden",
+        type=int,
+        default=DEFAULT_HIDDEN_CHANNELS,
+        help="Must match trained model",
+    )
+    parser.add_argument(
+        "--num_layers",
+        type=int,
+        default=DEFAULT_NUM_LAYERS,
+        help="Must match trained model",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=DEFAULT_DROPOUT,
+        help="Must match trained model",
+    )
+    parser.add_argument(
+        "--num_classes",
+        type=int,
+        default=DEFAULT_OUT_CLASSES,
+        help=f"Number of classes (default: {DEFAULT_OUT_CLASSES})",
+    )
     return parser.parse_args()
 
 
@@ -94,9 +144,9 @@ def main() -> None:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    dataset_base = results_root / "datasets"
+    dataset_base = results_root / RESULTS_DATASETS
     latest_dataset = get_latest_timestamp_dir(dataset_base)
-    if latest_dataset is None or not (latest_dataset / "data.pt").exists():
+    if latest_dataset is None or not (latest_dataset / PYG_DATA_FILENAME).exists():
         raise FileNotFoundError(f"No dataset found under {dataset_base}. Run build_dataset.py first.")
     dataset_name = latest_dataset.name
 
@@ -108,20 +158,20 @@ def main() -> None:
         fold_index=args.fold_index,
         dataset_name=dataset_name,
     )
-    gine_config = GineConfig(
-        in_channels=4,
-        hidden_channels=args.hidden,
-        num_layers=args.num_layers,
-        dropout=args.dropout,
-        out_classes=args.num_classes,
-    )
-
     _, _, test_loader = create_data_loaders(
         dataset_base, data_root, split_config, batch_size=args.batch_size
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = gine_config.build().to(device)
+    model = MProGNN(
+        in_channels=DEFAULT_IN_CHANNELS,
+        hidden_channels=args.hidden,
+        num_layers=args.num_layers,
+        dropout=args.dropout,
+        out_classes=args.num_classes,
+        pool=DEFAULT_POOL,
+        edge_dim=DEFAULT_EDGE_DIM,
+    ).to(device)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False))
 
     test_metrics, results = evaluate_test_with_predictions(model, test_loader, device)

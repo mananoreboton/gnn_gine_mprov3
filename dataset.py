@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 
 import pandas as pd
+from mprov3_gine_explainer_defaults import (
+    MPRO_INFO_CSV,
+    MPRO_SPLITS_DIR,
+    PYG_DATA_FILENAME,
+    PYG_PDB_ORDER_FILENAME,
+)
 import torch
 from torch_geometric.data import Data, InMemoryDataset
 from rdkit import Chem
@@ -77,7 +83,7 @@ def load_activity_and_category(
     data_root: Path,
 ) -> Tuple[Dict[str, float], Dict[str, int]]:
     """Load pIC50 and Category from Info.csv. Return dicts PDB_ID -> value."""
-    info_path = data_root / "Info.csv"
+    info_path = data_root / MPRO_INFO_CSV
     df = pd.read_csv(info_path, sep=";")
     pIC50 = dict(zip(df["PDB_ID"].astype(str), df["pIC50"].astype(float)))
     # Category: -1 -> 0, 0 -> 1, 1 -> 2 for class indices
@@ -116,7 +122,7 @@ def load_splits(
     Load train/val/test splits from three files in the Splits folder.
     Each file must contain num_folds lists of PDB IDs. Returns one (train_ids, val_ids, test_ids) per fold.
     """
-    splits_dir = data_root / "Splits"
+    splits_dir = data_root / MPRO_SPLITS_DIR
     train_path = splits_dir / train_file
     val_path = splits_dir / val_file
     test_path = splits_dir / test_file
@@ -140,7 +146,7 @@ def load_splits(
 
 def _pyg_dataset_not_found_message(data_root: Path, dataset_name: str) -> str:
     return (
-        f"PyG dataset not found at {data_root / dataset_name / 'data.pt'}. "
+        f"PyG dataset not found at {data_root / dataset_name / PYG_DATA_FILENAME}. "
         f"Create it first with: uv run python build_dataset.py --data_root {data_root} [--dataset_name {dataset_name}]"
     )
 
@@ -161,7 +167,7 @@ class MProV3Dataset(InMemoryDataset):
     ):
         self._data_root = Path(root)
         self._dataset_name = dataset_name
-        dataset_path = self._data_root / dataset_name / "data.pt"
+        dataset_path = self._data_root / dataset_name / PYG_DATA_FILENAME
         if not dataset_path.exists():
             raise FileNotFoundError(_pyg_dataset_not_found_message(self._data_root, dataset_name))
         super().__init__(root, transform, pre_transform, pre_filter)
@@ -177,11 +183,11 @@ class MProV3Dataset(InMemoryDataset):
 
     @property
     def raw_file_names(self) -> List[str]:
-        return ["Info.csv"]
+        return [MPRO_INFO_CSV]
 
     @property
     def processed_file_names(self) -> List[str]:
-        return ["data.pt"]
+        return [PYG_DATA_FILENAME]
 
     def process(self):
         raise FileNotFoundError(
@@ -191,7 +197,7 @@ class MProV3Dataset(InMemoryDataset):
 
 def load_dataset_pdb_order(data_root: Path, dataset_name: str) -> Optional[List[str]]:
     """Load PDB ID order from dataset folder (written by build_dataset). Returns None if missing."""
-    path = data_root / dataset_name / "pdb_order.txt"
+    path = data_root / dataset_name / PYG_PDB_ORDER_FILENAME
     if not path.exists():
         return None
     text = path.read_text().strip()

@@ -3,30 +3,62 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from mprov3_gine_explainer_defaults import (
+    CHECK_FORMAT_DATASETS_SUBDIR,
+    CHECK_FORMAT_RAW_DATA_SUBDIR,
+    DEFAULT_FOLD_INDEX,
+    DEFAULT_MPRO_SNAPSHOT_DIR_NAME,
+    DEFAULT_NUM_FOLDS,
+    DEFAULT_PYG_DATASET_NAME,
+    DEFAULT_TEST_SPLIT_FILE,
+    DEFAULT_TRAIN_SPLIT_FILE,
+    DEFAULT_TRAINING_CHECKPOINT_FILENAME,
+    DEFAULT_VAL_SPLIT_FILE,
+    MPRO_INFO_CSV,
+    MPRO_LIGAND_DIR,
+    MPRO_LIGAND_SDF_SUBDIR,
+    MPRO_SPLITS_DIR,
+    PYG_DATA_FILENAME,
+    PYG_PDB_ORDER_FILENAME,
+    RESULTS_CHECK_FORMAT,
+    RESULTS_CLASSIFICATIONS,
+    RESULTS_DATASETS,
+    RESULTS_DIR_NAME,
+    RESULTS_TRAININGS,
+    RESULTS_VISUALIZATIONS,
+)
+
 _PROJECT_ROOT = Path(__file__).resolve().parent
 
-# Default data root: MPro-URV_Version3_snapshot (sibling of gnn_version3 folder) — raw input data
-DEFAULT_DATA_ROOT = str(_PROJECT_ROOT.parent / "MPro-URV_Version3_snapshot")
+# Default data root: MPro snapshot directory (sibling of mprov3_gine)
+DEFAULT_DATA_ROOT = str(_PROJECT_ROOT.parent / DEFAULT_MPRO_SNAPSHOT_DIR_NAME)
 
-# All script outputs go under results/
-DEFAULT_RESULTS_ROOT = str(_PROJECT_ROOT / "results")
-RESULTS_VISUALIZATIONS = "visualizations"
-RESULTS_TRAININGS = "trainings"
-RESULTS_CLASSIFICATIONS = "classifications"
-RESULTS_DATASETS = "datasets"
-RESULTS_CHECK_FORMAT = "check_format"
-# Default roots for check scripts: dataset to validate at results/check_format/datasets, raw data at results/check_format/raw_data
-RESULTS_CHECK_DATASETS = "check_format/datasets"
-RESULTS_CHECK_RAW_DATA = "check_format/raw_data"
+# Script outputs under mprov3_gine/results/
+DEFAULT_RESULTS_ROOT = str(_PROJECT_ROOT / RESULTS_DIR_NAME)
 
-# Default name of the PyG dataset folder under results/datasets/ (contains data.pt)
-DEFAULT_PYG_DATASET_NAME = "processed_pyg"
-
-
-# Default split file names (in data_root/Splits/)
-DEFAULT_TRAIN_SPLIT_FILE = "train_index_folder.txt"
-DEFAULT_VAL_SPLIT_FILE = "valid_index_folder.txt"
-DEFAULT_TEST_SPLIT_FILE = "test_index_folder.txt"
+__all__ = [
+    "DEFAULT_DATA_ROOT",
+    "DEFAULT_RESULTS_ROOT",
+    "DEFAULT_PYG_DATASET_NAME",
+    "DEFAULT_TRAIN_SPLIT_FILE",
+    "DEFAULT_VAL_SPLIT_FILE",
+    "DEFAULT_TEST_SPLIT_FILE",
+    "SplitConfig",
+    "MPRO_INFO_CSV",
+    "MPRO_SPLITS_DIR",
+    "MPRO_LIGAND_DIR",
+    "MPRO_LIGAND_SDF_SUBDIR",
+    "PYG_DATA_FILENAME",
+    "PYG_PDB_ORDER_FILENAME",
+    "DEFAULT_TRAINING_CHECKPOINT_FILENAME",
+    "RESULTS_TRAININGS",
+    "RESULTS_DATASETS",
+    "RESULTS_CLASSIFICATIONS",
+    "RESULTS_VISUALIZATIONS",
+    "RESULTS_CHECK_FORMAT",
+    "CHECK_FORMAT_DATASETS_SUBDIR",
+    "CHECK_FORMAT_RAW_DATA_SUBDIR",
+]
 
 
 @dataclass(frozen=True)
@@ -36,30 +68,6 @@ class SplitConfig:
     train_file: str = DEFAULT_TRAIN_SPLIT_FILE
     val_file: str = DEFAULT_VAL_SPLIT_FILE
     test_file: str = DEFAULT_TEST_SPLIT_FILE
-    num_folds: int = 5
-    fold_index: int = 0
+    num_folds: int = DEFAULT_NUM_FOLDS
+    fold_index: int = DEFAULT_FOLD_INDEX
     dataset_name: str = DEFAULT_PYG_DATASET_NAME
-
-
-@dataclass(frozen=True)
-class TrainingConfig:
-    """Configuration for the training run."""
-
-    epochs: int = 100
-    batch_size: int = 32
-    lr: float = 1e-3
-    seed: int = 42
-
-
-# Legacy constants (for backwards compatibility or quick scripts)
-HIDDEN_CHANNELS = 64
-NUM_LAYERS = 3
-DROPOUT = 0.2
-IN_CHANNELS = 4
-EPOCHS = 100
-BATCH_SIZE = 32
-LR = 1e-3
-SEED = 42
-USE_SPLITS = False
-NUM_FOLDS = 5
-FOLD_INDEX = 0

@@ -8,7 +8,15 @@ from pathlib import Path
 
 import torch
 
-from config import DEFAULT_DATA_ROOT, DEFAULT_RESULTS_ROOT, RESULTS_DATASETS
+from config import (
+    DEFAULT_DATA_ROOT,
+    DEFAULT_RESULTS_ROOT,
+    MPRO_LIGAND_DIR,
+    MPRO_LIGAND_SDF_SUBDIR,
+    PYG_DATA_FILENAME,
+    PYG_PDB_ORDER_FILENAME,
+    RESULTS_DATASETS,
+)
 from dataset import load_activity_and_category, sdf_to_graph
 from tqdm import tqdm
 from utils import RunLogger, run_timestamp
@@ -22,7 +30,7 @@ def build_and_save_pyg_dataset(
     Build PyG graph list from SDFs and Info.csv and save to out_dir (e.g. results/datasets/<timestamp>/).
     Returns the path to the saved data.pt.
     """
-    sdf_dir = data_root / "Ligand" / "Ligand_SDF"
+    sdf_dir = data_root / MPRO_LIGAND_DIR / MPRO_LIGAND_SDF_SUBDIR
     if not sdf_dir.exists():
         raise FileNotFoundError(f"SDF directory not found: {sdf_dir}")
     pIC50_dict, category_dict = load_activity_and_category(data_root)
@@ -42,11 +50,11 @@ def build_and_save_pyg_dataset(
         data_list.append(g)
         dataset_pdb_order.append(pdb_id)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "data.pt"
+    out_path = out_dir / PYG_DATA_FILENAME
     from torch_geometric.data import InMemoryDataset
 
     InMemoryDataset.save(data_list, str(out_path))
-    pdb_order_path = out_dir / "pdb_order.txt"
+    pdb_order_path = out_dir / PYG_PDB_ORDER_FILENAME
     pdb_order_path.write_text("\n".join(dataset_pdb_order))
     return out_path
 
